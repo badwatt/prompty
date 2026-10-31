@@ -20,6 +20,12 @@ pub const FakeFiles = struct {
     directories: []const Directory,
     read_count: usize = 0,
     last_path: []const u8 = "",
+    written: [4]Write = undefined,
+    write_storage: [256]u8 = undefined,
+    write_storage_used: usize = 0,
+    write_count: usize = 0,
+
+    pub const Write = struct { path: []const u8, bytes: []const u8 };
 
     pub fn init(sources: []const File) FakeFiles {
         return .{ .sources = sources, .directories = &.{} };
@@ -35,6 +41,7 @@ pub const FakeFiles = struct {
 
     const vtable = ports.Files.VTable{
         .read = read,
+        .write = write,
         .exists = exists,
         .scan = scan,
         .currentDir = currentDir,
@@ -51,6 +58,22 @@ pub const FakeFiles = struct {
             return buffer[0..length];
         }
         return null;
+    }
+
+    fn write(ptr: *anyopaque, path: []const u8, bytes: []const u8) bool {
+        const self: *FakeFiles = @ptrCast(@alignCast(ptr));
+        // Copy the bytes: the writer hands over a stack buffer it reuses.
+        const room = @min(bytes.len, self.write_storage.len - self.write_storage_used);
+        @memcpy(self.write_storage[self.write_storage_used..][0..room], bytes[0..room]);
+        if (self.write_count < self.written.len) {
+            self.written[self.write_count] = .{
+                .path = path,
+                .bytes = self.write_storage[self.write_storage_used..][0..room],
+            };
+        }
+        self.write_storage_used += room;
+        self.write_count += 1;
+        return true;
     }
 
     fn exists(ptr: *anyopaque, path: []const u8) bool {
@@ -150,5 +173,55 @@ pub const FakeOutput = struct {
         const room = @min(bytes.len, self.buffer.len - self.length);
         @memcpy(self.buffer[self.length..][0..room], bytes[0..room]);
         self.length += room;
+    }
+};
+
+pub const FakeTerminal = struct {
+    response: ?[]const u8 = null,
+
+    pub fn terminal(self: *FakeTerminal) ports.Terminal {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable = ports.Terminal.VTable{ .background = background };
+
+    fn background(ptr: *anyopaque, buffer: []u8) ?[]const u8 {
+        const self: *FakeTerminal = @ptrCast(@alignCast(ptr));
+        const response = self.response orelse return null;
+        const length = @min(response.len, buffer.len);
+        @memcpy(buffer[0..length], response[0..length]);
+        return buffer[0..length];
+    }
+};
+
+/// A whole fake host: the unit under test sees exactly the ports the real
+/// process wires together.
+pub const FakeHost = struct {
+    files: FakeFiles,
+    environment: FakeEnv,
+    clock: FakeClock,
+    terminal: FakeTerminal,
+    out: FakeOutput = .{},
+    diagnostics: FakeOutput = .{},
+    user_id: u32 = 1000,
+
+    pub fn host(self: *FakeHost) ports.Host {
+        return .{
+            .files = self.files.files(),
+            .environ = self.environment.environ(),
+            .clock = self.clock.clock(),
+            .terminal = self.terminal.terminal(),
+            .stdout = self.out.output(),
+            .stderr = self.diagnostics.output(),
+            .user_id = self.user_id,
+        };
+    }
+
+    pub fn stdout(self: *FakeHost) []const u8 {
+        return self.out.written();
+    }
+
+    pub fn stderr(self: *FakeHost) []const u8 {
+        return self.diagnostics.written();
     }
 };

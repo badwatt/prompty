@@ -10,11 +10,13 @@ test {
     _ = @import("application/metadata.zig");
     _ = @import("application/shell_init.zig");
 
+    _ = @import("domain/cache.zig");
     _ = @import("domain/canvas.zig");
     _ = @import("domain/clock.zig");
     _ = @import("domain/duration.zig");
     _ = @import("domain/git.zig");
     _ = @import("domain/language.zig");
+    _ = @import("domain/osc.zig");
     _ = @import("domain/path.zig");
     _ = @import("domain/prompt.zig");
     _ = @import("domain/rgb.zig");
@@ -27,6 +29,7 @@ test {
     _ = @import("adapters/linux/env.zig");
     _ = @import("adapters/linux/fs.zig");
     _ = @import("adapters/linux/out.zig");
+    _ = @import("adapters/linux/tty.zig");
     _ = @import("adapters/tzif.zig");
 
     _ = @import("test_support/fakes.zig");

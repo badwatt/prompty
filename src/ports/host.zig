@@ -19,6 +19,7 @@ pub const Files = struct {
 
     pub const VTable = struct {
         read: *const fn (ptr: *anyopaque, path: []const u8, buffer: []u8) ?[]u8,
+        write: *const fn (ptr: *anyopaque, path: []const u8, bytes: []const u8) bool,
         exists: *const fn (ptr: *anyopaque, path: []const u8) bool,
         scan: *const fn (ptr: *anyopaque, path: []const u8, context: *anyopaque, visitor: Visitor) bool,
         currentDir: *const fn (ptr: *anyopaque, buffer: []u8) ?[]const u8,
@@ -28,6 +29,12 @@ pub const Files = struct {
     /// a prompt is a fact of life, not an error to propagate.
     pub fn read(self: Files, path: []const u8, buffer: []u8) ?[]u8 {
         return self.vtable.read(self.ptr, path, buffer);
+    }
+
+    /// Writes a small file, creating its parent directories when needed.
+    /// Failure is not an error: a prompt still renders with the default theme.
+    pub fn write(self: Files, path: []const u8, bytes: []const u8) bool {
+        return self.vtable.write(self.ptr, path, bytes);
     }
 
     pub fn exists(self: Files, path: []const u8) bool {
@@ -89,10 +96,26 @@ pub const Output = struct {
     }
 };
 
+/// The terminal itself, questioned only when the user asks for it: an OSC
+/// round trip is far too expensive for a prompt, but perfectly fine once.
+pub const Terminal = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        background: *const fn (ptr: *anyopaque, buffer: []u8) ?[]const u8,
+    };
+
+    pub fn background(self: Terminal, buffer: []u8) ?[]const u8 {
+        return self.vtable.background(self.ptr, buffer);
+    }
+};
+
 pub const Host = struct {
     files: Files,
     environ: Environ,
     clock: Clock,
+    terminal: Terminal,
     stdout: Output,
     stderr: Output,
     user_id: u32,

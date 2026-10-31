@@ -17,11 +17,16 @@ pub const RenderOptions = struct {
     color: bool = true,
 };
 
+pub const ThemeOptions = struct {
+    detect: bool = false,
+    force: bool = false,
+};
+
 pub const Action = union(enum) {
     render: RenderOptions,
     init: canvas.Shell,
     version,
-    theme,
+    theme: ThemeOptions,
     help,
     invalid: []const u8,
 };
@@ -38,7 +43,7 @@ pub fn parse(argv: []const []const u8) Action {
     if (std.mem.eql(u8, command, "render")) return parseRender(rest);
     if (std.mem.eql(u8, command, "init")) return parseInit(rest);
     if (std.mem.eql(u8, command, "version")) return .version;
-    if (std.mem.eql(u8, command, "theme")) return .theme;
+    if (std.mem.eql(u8, command, "theme")) return parseTheme(rest);
     if (std.mem.eql(u8, command, "help")) return .help;
     if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) return .help;
     if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-V")) return .version;
@@ -61,6 +66,20 @@ fn parseRender(flags: []const []const u8) Action {
         return .{ .invalid = flag };
     }
     return .{ .render = options };
+}
+
+fn parseTheme(arguments: []const []const u8) Action {
+    if (arguments.len == 0) return .{ .theme = .{} };
+    if (!std.mem.eql(u8, arguments[0], "detect")) return .{ .invalid = arguments[0] };
+    var options = ThemeOptions{ .detect = true };
+    for (arguments[1..]) |flag| {
+        if (std.mem.eql(u8, flag, "--force")) {
+            options.force = true;
+            continue;
+        }
+        return .{ .invalid = flag };
+    }
+    return .{ .theme = options };
 }
 
 fn parseInit(arguments: []const []const u8) Action {
@@ -92,7 +111,8 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
             host.stdout.write(line);
             return exit_ok;
         },
-        .theme => {
+        .theme => |options| {
+            if (options.detect) return detectTheme(host, options.force);
             writeTheme(host);
             return exit_ok;
         },
@@ -123,6 +143,26 @@ const usage =
     "\n" ++
     "Set PROMTY_BACKGROUND=#rrggbb to match your terminal background,\n" ++
     "and NO_COLOR=1 to disable colours entirely.\n";
+
+/// Detects the terminal background once and remembers it, so that every later
+/// prompt is a single file read away from a theme that matches the terminal.
+fn detectTheme(host: ports.Host, force: bool) u8 {
+    if (!force and compose.cachedBackground(host) != null) {
+        writeTheme(host);
+        return exit_ok;
+    }
+    const detected = compose.detectBackground(host) orelse {
+        host.stderr.write(
+            "prompty: the terminal did not report a background colour; " ++
+                "set PROMTY_BACKGROUND=#rrggbb instead\n",
+        );
+        writeTheme(host);
+        return exit_ok;
+    };
+    _ = compose.rememberBackground(host, detected);
+    writeTheme(host);
+    return exit_ok;
+}
 
 fn writeTheme(host: ports.Host) void {
     const theme = compose.themeFor(host);
@@ -200,7 +240,17 @@ test "version has three spellings" {
 }
 
 test "theme prints the derived palette" {
-    try expectParse(.theme, &.{ "prompty", "theme" });
+    try expectParse(.{ .theme = .{} }, &.{ "prompty", "theme" });
+}
+
+test "theme detect takes an optional force" {
+    try expectParse(.{ .theme = .{ .detect = true } }, &.{ "prompty", "theme", "detect" });
+    try expectParse(
+        .{ .theme = .{ .detect = true, .force = true } },
+        &.{ "prompty", "theme", "detect", "--force" },
+    );
+    try expectParse(.{ .invalid = "forget" }, &.{ "prompty", "theme", "forget" });
+    try expectParse(.{ .invalid = "--watch" }, &.{ "prompty", "theme", "detect", "--watch" });
 }
 
 test "unknown commands are reported verbatim" {

@@ -22,6 +22,7 @@ pub const Fs = struct {
 
     const vtable = ports.Files.VTable{
         .read = readFile,
+        .write = writeFile,
         .exists = exists,
         .scan = scanDir,
         .currentDir = currentDir,
@@ -29,25 +30,66 @@ pub const Fs = struct {
 
     fn readFile(_: *anyopaque, path: []const u8, buffer: []u8) ?[]u8 {
         std.debug.assert(buffer.len > 0);
-        const fd = openPath(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }) orelse return null;
+        const fd = openPath(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) orelse return null;
         defer _ = linux.close(fd);
         return readAll(fd, buffer);
     }
 
+    fn writeFile(_: *anyopaque, path: []const u8, bytes: []const u8) bool {
+        std.debug.assert(path.len > 0);
+        makeParentDirectories(path);
+        const options = linux.O{
+            .ACCMODE = .WRONLY,
+            .CREAT = true,
+            .TRUNC = true,
+            .CLOEXEC = true,
+        };
+        const fd = openPath(path, options, 0o644) orelse return false;
+        defer _ = linux.close(fd);
+        var written: usize = 0;
+        while (written < bytes.len) {
+            const rc = linux.write(fd, bytes[written..].ptr, bytes.len - written);
+            if (linux.errno(rc) != .SUCCESS) return false;
+            written += rc;
+        }
+        return true;
+    }
+
     fn exists(_: *anyopaque, path: []const u8) bool {
-        const fd = openPath(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }) orelse return false;
+        const fd = openPath(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0) orelse return false;
         _ = linux.close(fd);
         return true;
     }
 
+    /// Creates every missing ancestor of `path`, ignoring failures: if the
+    /// directory cannot be created the following open will fail cleanly.
+    fn makeParentDirectories(path: []const u8) void {
+        var buffer: [4096]u8 = undefined;
+        if (path.len + 1 > buffer.len) return;
+        @memcpy(buffer[0..path.len], path);
+        buffer[path.len] = 0;
+
+        var index: usize = 1;
+        while (index < path.len) : (index += 1) {
+            if (buffer[index] != '/') continue;
+            buffer[index] = 0;
+            _ = linux.mkdirat(linux.AT.FDCWD, @ptrCast(&buffer), 0o755);
+            buffer[index] = '/';
+        }
+    }
+
     fn scanDir(_: *anyopaque, path: []const u8, context: *anyopaque, visitor: ports.Visitor) bool {
         const options = linux.O{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true };
-        const fd = openPath(path, options) orelse return false;
+        const fd = openPath(path, options, 0) orelse return false;
         defer _ = linux.close(fd);
 
         var buffer: [4096]u8 align(@alignOf(linux.dirent64)) = undefined;
         while (true) {
-            const filled = posix.read(fd, &buffer) catch return false;
+            // A directory is read with getdents64, never with read(2): the
+            // latter always fails with EISDIR.
+            const rc = linux.getdents64(fd, &buffer, buffer.len);
+            if (linux.errno(rc) != .SUCCESS) return false;
+            const filled: usize = rc;
             if (filled == 0) return true;
             var offset: usize = 0;
             while (offset < filled) {
@@ -84,9 +126,9 @@ pub const Fs = struct {
         return name;
     }
 
-    fn openPath(path: []const u8, options: linux.O) ?linux.fd_t {
+    fn openPath(path: []const u8, options: linux.O, mode: linux.mode_t) ?linux.fd_t {
         std.debug.assert(path.len > 0);
-        return posix.openat(linux.AT.FDCWD, path, options, 0) catch null;
+        return posix.openat(linux.AT.FDCWD, path, options, mode) catch null;
     }
 
     fn readAll(fd: linux.fd_t, buffer: []u8) ?[]u8 {

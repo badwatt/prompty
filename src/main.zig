@@ -13,6 +13,7 @@ const clock_adapter = @import("adapters/linux/clock.zig");
 const env_adapter = @import("adapters/linux/env.zig");
 const fs_adapter = @import("adapters/linux/fs.zig");
 const out_adapter = @import("adapters/linux/out.zig");
+const tty_adapter = @import("adapters/linux/tty.zig");
 
 pub fn main(minimal: std.process.Init.Minimal) u8 {
     return entry(minimal);
@@ -34,6 +35,7 @@ pub fn entry(minimal: std.process.Init.Minimal) u8 {
         .files = files,
         .environ = environment.environ(),
         .clock = wall_clock.clock(),
+        .terminal = tty_adapter.Tty.instance.terminal(),
         .stdout = out_adapter.Out.stdout.output(),
         .stderr = out_adapter.Out.stderr.output(),
         .user_id = linux.getuid(),
