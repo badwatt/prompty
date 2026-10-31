@@ -31,7 +31,7 @@ pub const Tty = struct {
 
     pub fn terminal(self: *const Tty) ports.Terminal {
         return .{
-            .ptr = @constCast(@ptrCast(self)),
+            .ptr = @ptrCast(@constCast(self)),
             .vtable = &vtable,
         };
     }

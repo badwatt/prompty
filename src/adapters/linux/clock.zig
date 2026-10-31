@@ -21,7 +21,7 @@ pub const LocalClock = struct {
 
     pub fn clock(self: *const LocalClock) ports.Clock {
         return .{
-            .ptr = @constCast(@ptrCast(self)),
+            .ptr = @ptrCast(@constCast(self)),
             .vtable = &vtable,
         };
     }

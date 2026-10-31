@@ -162,7 +162,11 @@ fn gitProbe(host: ports.Host, working_directory: []const u8, store: *store_mod.S
 
     var directory = working_directory;
     var walked: u8 = 0;
-    while (walked < max_git_walk) : (walked += 1) {
+    while (true) {
+        // Every iteration either finds a repository or walks one level up, so
+        // the assertion is the loop's bound.
+        std.debug.assert(walked < max_git_walk);
+        walked += 1;
         if (locate(host, directory, &git_dir_buffer, &head_buffer)) |located| {
             const operation = operationIn(host, located.git_dir);
             const branch = switch (located.head) {
@@ -180,7 +184,6 @@ fn gitProbe(host: ports.Host, working_directory: []const u8, store: *store_mod.S
         }
         directory = parent(directory) orelse return null;
     }
-    return null;
 }
 
 fn locate(
@@ -677,13 +680,13 @@ test "direnv is visible without running it" {
 }
 
 test "colour is disabled by NO_COLOR and by a dumb terminal" {
-    var plain = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{"NO_COLOR", "1"}}));
+    var plain = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "NO_COLOR", "1" }}));
     try std.testing.expect(!plain.model(.{}).color);
 
-    var dumb = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{"TERM", "dumb"}}));
+    var dumb = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "dumb" }}));
     try std.testing.expect(!dumb.model(.{}).color);
 
-    var colourful = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{"TERM", "xterm-256color"}}));
+    var colourful = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "xterm-256color" }}));
     try std.testing.expect(colourful.model(.{}).color);
 
     // The caller can also turn colour off explicitly.
@@ -756,4 +759,83 @@ test "detection fails cleanly and is not remembered without a cache location" {
     try std.testing.expectEqual(@as(?theme_mod.Rgb, null), detectBackground(harness.host.host()));
 
     try std.testing.expect(!rememberBackground(harness.host.host(), default_theme_background));
+}
+
+test "rust falls back to the plain toolchain file" {
+    const entries = [_]ports.Entry{.{ .name = "Cargo.toml", .is_dir = false }};
+    const directories = [_]fakes.FakeFiles.Directory{
+        .{ .path = "/home/dev/proj", .entries = &entries },
+    };
+    const sources = [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/rust-toolchain", .contents = "1.79.0\n" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.files.directories = &directories;
+
+    const languages = harness.model(.{}).detectedLanguages();
+    try std.testing.expectEqual(@as(usize, 1), languages.len);
+    try std.testing.expectEqualStrings("1.79.0", languages[0].version.?);
+}
+
+test "node falls back to .node-version and go without a directive has none" {
+    const entries = [_]ports.Entry{
+        .{ .name = "package.json", .is_dir = false },
+        .{ .name = "go.mod", .is_dir = false },
+    };
+    const directories = [_]fakes.FakeFiles.Directory{
+        .{ .path = "/home/dev/proj", .entries = &entries },
+    };
+    const sources = [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/.node-version", .contents = "18.20.0\n" },
+        .{ .path = "/home/dev/proj/go.mod", .contents = "module example.com/proj\n" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.files.directories = &directories;
+
+    const languages = harness.model(.{}).detectedLanguages();
+    try std.testing.expectEqual(@as(usize, 2), languages.len);
+    try std.testing.expectEqual(language_mod.Kind.go, languages[0].kind);
+    try std.testing.expectEqual(@as(?[]const u8, null), languages[0].version);
+    try std.testing.expectEqual(language_mod.Kind.node, languages[1].kind);
+    try std.testing.expectEqualStrings("18.20.0", languages[1].version.?);
+}
+
+test "a zig project without a version file falls back to its manifest" {
+    const entries = [_]ports.Entry{.{ .name = "build.zig.zon", .is_dir = false }};
+    const directories = [_]fakes.FakeFiles.Directory{
+        .{ .path = "/home/dev/proj", .entries = &entries },
+    };
+    const sources = [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/build.zig.zon", .contents = ".{ .minimum_zig_version = \"0.16.0\" }" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.files.directories = &directories;
+
+    const languages = harness.model(.{}).detectedLanguages();
+    try std.testing.expectEqual(@as(usize, 1), languages.len);
+    try std.testing.expectEqualStrings("0.16.0", languages[0].version.?);
+}
+
+test "a toolchain file without a usable channel means no version" {
+    const entries = [_]ports.Entry{
+        .{ .name = "Cargo.toml", .is_dir = false },
+        .{ .name = "package.json", .is_dir = false },
+    };
+    const directories = [_]fakes.FakeFiles.Directory{
+        .{ .path = "/home/dev/proj", .entries = &entries },
+    };
+    const sources = [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/rust-toolchain.toml", .contents = "[toolchain]\n" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.files.directories = &directories;
+
+    const languages = harness.model(.{}).detectedLanguages();
+    try std.testing.expectEqual(@as(usize, 2), languages.len);
+    try std.testing.expectEqual(@as(?[]const u8, null), languages[0].version);
+    try std.testing.expectEqual(@as(?[]const u8, null), languages[1].version);
 }

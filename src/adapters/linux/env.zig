@@ -11,7 +11,7 @@ pub const Env = struct {
 
     pub fn environ(self: *const Env) ports.Environ {
         return .{
-            .ptr = @constCast(@ptrCast(self)),
+            .ptr = @ptrCast(@constCast(self)),
             .vtable = &vtable,
         };
     }

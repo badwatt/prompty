@@ -192,6 +192,18 @@ test "derive is deterministic and keeps the background untouched" {
     try std.testing.expectEqual(background, first.background);
 }
 
+test "the transfer function handles the near-black end of the range" {
+    // Below the linear cut-off the encoding is a plain multiplication.
+    try std.testing.expectEqual(@as(u8, 0), delinearize(0.0));
+    try std.testing.expectEqual(@as(u8, 9), delinearize(0.003));
+    // The rounding of the transfer function loses one step at the top end.
+    try std.testing.expect(delinearize(1.0) >= 254);
+    try std.testing.expect(delinearize(1.0) <= 255);
+    // Out-of-range values are clamped rather than wrapped.
+    try std.testing.expectEqual(@as(u8, 0), delinearize(-0.5));
+    try std.testing.expect(delinearize(2.0) >= 254);
+}
+
 test "derive matches the tuned Catppuccin Mocha surfaces" {
     const theme = Theme.derive(Theme.default_background);
     try expectClose(0x3c, theme.user_surface.r, 1);

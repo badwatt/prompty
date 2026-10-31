@@ -58,7 +58,7 @@ test "main dispatches the generated name and version" {
 
 test "main reports a usage error through the exit code" {
     const argv = [_][*:0]const u8{ "prompty", "nonsense" };
-    const environment = [_:null]?[*:0]const u8{ null };
+    const environment = [_:null]?[*:0]const u8{null};
     const minimal = std.process.Init.Minimal{
         .args = .{ .vector = &argv },
         .environ = .{ .block = .{ .slice = &environment } },

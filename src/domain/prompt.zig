@@ -109,47 +109,44 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         canvas.text(" ");
     }
 
-    // Close the pill: the last surface fades back into the terminal background.
+    // Close the pill: the last surface fades back into the terminal background,
+    // and the reset drops the background colour for everything that follows.
     paint(&canvas, if (model.git != null) model.theme.git_surface else model.theme.path_surface, null);
     canvas.text(powerline.separator);
+    reset(&canvas);
 
     var extras = Extras{ .canvas = &canvas, .theme = &model.theme };
     for (model.detectedLanguages()) |language| {
-        extras.begin();
+        extras.begin(model.theme.text);
         extras.text(language.kind.icon());
         if (language.version) |version| {
             extras.text(" ");
             extras.text(version);
         }
-        extras.end(model.theme.text);
     }
     if (model.direnv) {
-        extras.begin();
+        extras.begin(model.theme.green);
         extras.text(direnv_glyph);
-        extras.end(model.theme.green);
     }
     if (model.exit_code) |code| {
         if (code != 0) {
-            extras.begin();
+            extras.begin(model.theme.red);
             extras.text(failure_glyph);
             var status: [3]u8 = undefined;
             extras.text(std.fmt.bufPrint(&status, "{d}", .{code}) catch unreachable);
-            extras.end(model.theme.red);
         }
     }
     if (model.duration_ms) |milliseconds| {
-        extras.begin();
+        extras.begin(durationColor(&model.theme, milliseconds));
         var human: [duration_mod.max_length]u8 = undefined;
         extras.text(duration_mod.format(&human, milliseconds));
-        extras.end(durationColor(&model.theme, milliseconds));
     }
     if (model.time) |now| {
-        extras.begin();
+        extras.begin(model.theme.muted);
         extras.text(clock_glyph);
         extras.text(" ");
         var digits: [clock_mod.max_length]u8 = undefined;
         extras.text(clock_mod.format(&digits, now));
-        extras.end(model.theme.muted);
     }
 
     paint(&canvas, model.theme.green, null);
@@ -165,25 +162,22 @@ fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
     return theme.muted;
 }
 
+/// The dim detail after the pill: separated by two spaces, one colour change
+/// per item and nothing else.
 const Extras = struct {
     canvas: *Canvas,
     theme: *const theme_mod.Theme,
     count: usize = 0,
 
-    fn begin(self: *Extras) void {
-        self.canvas.escape("\x1b[0m");
+    fn begin(self: *Extras, color: Rgb) void {
         self.canvas.text(" ");
         if (self.count > 0) self.canvas.text(" ");
         self.count += 1;
+        paint(self.canvas, color, null);
     }
 
     fn text(self: *Extras, content: []const u8) void {
         self.canvas.text(content);
-    }
-
-    fn end(self: *Extras, color: Rgb) void {
-        std.debug.assert(self.count > 0);
-        paint(self.canvas, color, null);
     }
 };
 
@@ -261,15 +255,8 @@ test "marks root with the alert colour and keeps the cap" {
     const theme = fixtureTheme();
     const rendered = renderToString(&model);
     var buffer: [24]u8 = undefined;
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        rendered,
-        std.fmt.bufPrint(&buffer, "\x1b[38;2;{d};{d};{d}m", .{
-            theme.red.r,
-            theme.red.g,
-            theme.red.b,
-        }) catch unreachable,
-    ) != null);
+    const red_sequence = std.fmt.bufPrint(&buffer, "\x1b[38;2;{d};{d};{d}m", .{ theme.red.r, theme.red.g, theme.red.b }) catch unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, rendered, red_sequence) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, " root ") != null);
 }
 

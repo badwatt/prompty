@@ -15,7 +15,7 @@ pub const Out = struct {
 
     pub fn output(self: *const Out) ports.Output {
         return .{
-            .ptr = @constCast(@ptrCast(self)),
+            .ptr = @ptrCast(@constCast(self)),
             .vtable = &vtable,
         };
     }

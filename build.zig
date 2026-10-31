@@ -8,14 +8,17 @@ const application_version: []const u8 = manifest.version;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    // ReleaseFast by default: a prompt runs for every command a human types, so
-    // an unoptimised default would be a trap.
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .fast });
+    // A prompt runs for every command a human types, so the default build is
+    // ReleaseFast with debug information stripped: 71 KiB instead of 12 MiB,
+    // and 0.7 ms instead of 1.2 ms per prompt. Ask for `-Ddebug` when you want
+    // to attach a debugger.
+    const debug_build = b.option(bool, "debug", "Build unoptimised with debug info") orelse false;
+    const optimize: std.builtin.OptimizeMode = if (debug_build) .debug else .fast;
     const strip = b.option(
         bool,
         "strip",
         "Omit debug information from the installed binary",
-    ) orelse (optimize != .debug);
+    ) orelse !debug_build;
 
     const options = b.addOptions();
     options.addOption([]const u8, "name", application_name);
@@ -59,8 +62,23 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the unit and integration tests");
     test_step.dependOn(&run_tests.step);
 
+    // Coverage needs an unstripped, LLVM-built binary: kcov maps breakpoints
+    // through DWARF, which stripping removes.
+    const coverage_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .debug,
+        .strip = false,
+    });
+    coverage_module.addOptions("build_options", options);
+    const coverage_exe = b.addExecutable(.{
+        .name = application_name,
+        .root_module = coverage_module,
+        .use_llvm = true,
+    });
+
     const coverage_step = b.step("coverage", "Require 100% line coverage via kcov");
-    coverage_step.dependOn(addCoverage(b, test_binary, exe));
+    coverage_step.dependOn(addCoverage(b, test_binary, coverage_exe));
 
     const bench_step = b.step("bench", "Measure the wall clock cost of a render");
     const bench_module = b.createModule(.{
@@ -85,23 +103,31 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     // the same name.
     const include = b.fmt("--include-pattern={s}/", .{source_root});
 
+    // kcov insists on cleaning directories that exist, so create them first.
+    var prepare = b.addSystemCommand(&.{"mkdir"});
+    prepare.setName("mkdir coverage");
+    prepare.addArg("-p");
+    prepare.addArg(b.fmt("{s}/tests", .{output_root}));
+    prepare.addArg(b.fmt("{s}/merged", .{output_root}));
+
     const test_run = b.addSystemCommand(&.{ kcov, "--clean", include, b.fmt("{s}/tests", .{output_root}) });
     test_run.addArtifactArg(test_binary);
     test_run.expectExitCode(0);
+    test_run.step.dependOn(&prepare.step);
 
     // The installed binary is traced too: `main` and the real adapters only run
     // when the real process runs.
     const scenarios = [_]Scenario{
         .{ .arguments = &.{"version"} },
         .{ .arguments = &.{"theme"} },
-        .{ .arguments = &.{"init"} },
+        .{ .arguments = &.{"init"}, .expected_exit = 2 },
         .{ .arguments = &.{ "init", "zsh" } },
         .{ .arguments = &.{ "init", "bash" } },
-        .{ .arguments = &.{"nonsense"} },
+        .{ .arguments = &.{"nonsense"}, .expected_exit = 2 },
         .{ .arguments = &.{ "render", "--shell=zsh" } },
         .{ .arguments = &.{ "render", "--shell=bash", "--no-color" } },
         .{ .arguments = &.{ "render", "--no-color" } },
-        .{ .arguments = &.{ "render", "--wat" } },
+        .{ .arguments = &.{ "render", "--wat" }, .expected_exit = 2 },
     };
 
     var merge = b.addSystemCommand(&.{ kcov, "--merge", b.fmt("{s}/merged", .{output_root}) });
@@ -110,10 +136,13 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
 
     for (scenarios, 0..) |scenario, index| {
         const directory = b.fmt("{s}/scenario-{d}", .{ output_root, index });
+        prepare.addArg(directory);
+
         const run = b.addSystemCommand(&.{ kcov, "--clean", include, directory });
         run.addArtifactArg(exe);
         run.addArgs(scenario.arguments);
         run.expectExitCode(scenario.expected_exit);
+        run.step.dependOn(&prepare.step);
         merge.step.dependOn(&run.step);
         merge.addArg(directory);
     }
@@ -125,7 +154,7 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     const checker = b.addExecutable(.{ .name = "check-coverage", .root_module = checker_module });
     const check = b.addRunArtifact(checker);
     check.step.dependOn(&merge.step);
-    check.addArg(b.fmt("{s}/merged/coverage.json", .{output_root}));
+    check.addArg(b.fmt("{s}/merged/kcov-merged/coverage.json", .{output_root}));
     check.addArg(source_root);
     return &check.step;
 }

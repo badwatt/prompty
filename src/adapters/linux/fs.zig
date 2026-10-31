@@ -15,7 +15,7 @@ pub const Fs = struct {
 
     pub fn files(self: *const Fs) ports.Files {
         return .{
-            .ptr = @constCast(@ptrCast(self)),
+            .ptr = @ptrCast(@constCast(self)),
             .vtable = &vtable,
         };
     }
@@ -141,3 +141,53 @@ pub const Fs = struct {
         return buffer[0..filled];
     }
 };
+
+test "the real adapter reads, lists, writes and reports the working directory" {
+    const files = Fs.instance.files();
+
+    var cwd_buffer: [4096]u8 = undefined;
+    const cwd = files.currentDir(&cwd_buffer).?;
+    try std.testing.expect(cwd.len > 0);
+    try std.testing.expect(cwd[0] == '/');
+
+    var content_buffer: [8192]u8 = undefined;
+    const content = files.read("src/adapters/linux/fs.zig", &content_buffer).?;
+    try std.testing.expect(std.mem.indexOf(u8, content, "Linux file adapter") != null);
+
+    try std.testing.expect(files.read("src/definitely/missing", &content_buffer) == null);
+    try std.testing.expect(!files.exists("src/definitely/missing"));
+    try std.testing.expect(files.exists("src/adapters/linux/fs.zig"));
+
+    const Counter = struct {
+        seen: usize = 0,
+        seen_directory: bool = false,
+
+        fn visit(context: *anyopaque, entry: ports.Entry) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.seen += 1;
+            if (entry.is_dir and std.mem.eql(u8, entry.name, "domain")) self.seen_directory = true;
+        }
+    };
+
+    var counter = Counter{};
+    try std.testing.expect(files.scan("src", &counter, Counter.visit));
+    try std.testing.expect(counter.seen > 3);
+    try std.testing.expect(counter.seen_directory);
+    try std.testing.expect(!files.scan("src/definitely/missing", &counter, Counter.visit));
+
+    // Writing creates every missing ancestor.
+    var path_buffer: [128]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buffer, ".zig-cache/prompty-adapter-test/nested/theme", .{}) catch unreachable;
+    try std.testing.expect(files.write(path, "#123456\n"));
+
+    var read_back: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("#123456\n", files.read(path, &read_back).?);
+
+    // Clean up the scratch tree so the test is repeatable.
+    var zero_terminated: [129]u8 = undefined;
+    @memcpy(zero_terminated[0..path.len], path);
+    zero_terminated[path.len] = 0;
+    _ = linux.unlinkat(linux.AT.FDCWD, zero_terminated[0..path.len :0], 0);
+    _ = linux.unlinkat(linux.AT.FDCWD, ".zig-cache/prompty-adapter-test/nested", linux.AT.REMOVEDIR);
+    _ = linux.unlinkat(linux.AT.FDCWD, ".zig-cache/prompty-adapter-test", linux.AT.REMOVEDIR);
+}

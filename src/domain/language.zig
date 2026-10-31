@@ -43,7 +43,7 @@ pub const Set = struct {
     }
 
     fn bit(kind: Kind) u5 {
-        return @as(u5, 1) << @intFromEnum(kind);
+        return @as(u5, 1) << @backingInt(kind);
     }
 };
 
@@ -270,7 +270,7 @@ test "icons are single glyphs" {
     const info = @typeInfo(Kind).@"enum";
     inline for (info.field_names, info.field_values) |field_name, field_value| {
         _ = field_name;
-        const kind: Kind = @enumFromInt(field_value);
+        const kind: Kind = @fromBackingInt(@intCast(field_value));
         try std.testing.expect(kind.icon().len > 0);
         try std.testing.expect(kind.icon().len < 6);
     }

@@ -256,3 +256,145 @@ test "theme detect takes an optional force" {
 test "unknown commands are reported verbatim" {
     try expectParse(.{ .invalid = "bench" }, &.{ "prompty", "bench" });
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch tests: the commands run against a fake host, which is exactly what
+// the real process wires together.
+// ---------------------------------------------------------------------------
+
+const fakes = @import("../test_support/fakes.zig");
+
+const CliHarness = struct {
+    files: fakes.FakeFiles,
+    environment: fakes.FakeEnv,
+    clock: fakes.FakeClock = .{},
+    terminal: fakes.FakeTerminal = .{},
+    host: fakes.FakeHost,
+    store: store_mod.Store = undefined,
+
+    fn init(sources: []const fakes.FakeFiles.File, environment: []const [2][]const u8) CliHarness {
+        var harness = CliHarness{
+            .files = fakes.FakeFiles.withDirectories(sources, &.{}),
+            .environment = fakes.FakeEnv.init(environment),
+            .host = undefined,
+        };
+        harness.host = .{
+            .files = harness.files,
+            .environment = harness.environment,
+            .clock = harness.clock,
+            .terminal = harness.terminal,
+        };
+        harness.store.reset();
+        return harness;
+    }
+
+    fn dispatch(self: *CliHarness, argv: []const []const u8) u8 {
+        return run(parse(argv), self.host.host(), &self.store);
+    }
+};
+
+const base_environment = [_][2][]const u8{
+    .{ "USER", "dev" },
+    .{ "HOME", "/home/dev" },
+    .{ "PWD", "/home/dev" },
+};
+
+test "version prints the name and version from the manifest" {
+    var harness = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "version" }));
+
+    var expected: [64]u8 = undefined;
+    const line = std.fmt.bufPrint(&expected, "{s} {s}\n", .{ metadata.name, metadata.version }) catch unreachable;
+    try std.testing.expectEqualStrings(line, harness.host.stdout());
+}
+
+test "help is printed for no arguments and for help" {
+    var implicit = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, implicit.dispatch(&.{"prompty"}));
+    try std.testing.expect(std.mem.indexOf(u8, implicit.host.stdout(), "usage: " ++ metadata.name) != null);
+
+    var explicit = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, explicit.dispatch(&.{ "prompty", "help" }));
+    try std.testing.expectEqualStrings(implicit.host.stdout(), explicit.host.stdout());
+}
+
+test "render writes exactly one prompt and one write" {
+    var harness = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "render", "--no-color" }));
+
+    const rendered = harness.host.stdout();
+    try std.testing.expect(std.mem.startsWith(u8, rendered, "\n"));
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{276f}") != null);
+    // One syscall per prompt: the whole line goes out together.
+    try std.testing.expectEqual(@as(usize, 1), harness.host.out.writes);
+}
+
+test "init prints the integration for the requested shell" {
+    var zsh = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, zsh.dispatch(&.{ "prompty", "init", "zsh" }));
+    try std.testing.expect(std.mem.indexOf(u8, zsh.host.stdout(), "add-zsh-hook precmd") != null);
+
+    var bash = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, bash.dispatch(&.{ "prompty", "init", "bash" }));
+    try std.testing.expect(std.mem.indexOf(u8, bash.host.stdout(), "PROMPT_COMMAND") != null);
+}
+
+test "theme prints one line per palette entry" {
+    var harness = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "theme" }));
+    const output = harness.host.stdout();
+    try std.testing.expect(std.mem.indexOf(u8, output, "background #1e1e2e\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "yellow") != null);
+    try std.testing.expectEqual(@as(usize, 9), harness.host.out.writes);
+}
+
+test "theme detect is a no-op once the background is known" {
+    var harness = CliHarness.init(&.{
+        .{ .path = "/home/dev/.cache/prompty/theme", .contents = "#f5f5f5" },
+    }, &base_environment);
+    try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "theme", "detect" }));
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "background #f5f5f5") != null);
+    // No terminal was asked, and nothing was written.
+    try std.testing.expectEqual(@as(usize, 0), harness.host.files.write_count);
+}
+
+test "theme detect stores what the terminal reports" {
+    var harness = CliHarness.init(&.{}, &base_environment);
+    harness.host.terminal = .{ .response = "\x1b]11;rgb:0000/0000/0000\x1b\\" };
+
+    try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "theme", "detect" }));
+    try std.testing.expectEqual(@as(usize, 1), harness.host.files.write_count);
+    try std.testing.expectEqualStrings("#000000\n", harness.host.files.written[0].bytes);
+    // The fake filesystem records writes but does not materialise them, so the
+    // printed palette still reflects the default background.
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "background #") != null);
+}
+
+test "theme detect --force asks again even when cached" {
+    var harness = CliHarness.init(&.{
+        .{ .path = "/home/dev/.cache/prompty/theme", .contents = "#f5f5f5" },
+    }, &base_environment);
+    harness.host.terminal = .{ .response = "\x1b]11;rgb:0000/0000/0000\x1b\\" };
+
+    try std.testing.expectEqual(
+        exit_ok,
+        harness.dispatch(&.{ "prompty", "theme", "detect", "--force" }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), harness.host.files.write_count);
+}
+
+test "a silent terminal is reported without failing the shell" {
+    var harness = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "theme", "detect" }));
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stderr(), "did not report") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "background #1e1e2e") != null);
+    try std.testing.expectEqual(@as(usize, 0), harness.host.files.write_count);
+}
+
+test "an unknown argument is a usage error on stderr" {
+    var harness = CliHarness.init(&.{}, &base_environment);
+    try std.testing.expectEqual(exit_usage, harness.dispatch(&.{ "prompty", "wat" }));
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stderr(), "unknown argument 'wat'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stderr(), "usage: ") != null);
+    try std.testing.expectEqualStrings("", harness.host.stdout());
+}

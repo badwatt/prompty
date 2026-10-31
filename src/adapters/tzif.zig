@@ -253,7 +253,7 @@ const Fixture = struct {
         self.append(block.indices);
         for (block.types) |type_value| {
             self.appendInt(i32, type_value.offset);
-            self.append(&.{@intFromBool(type_value.is_dst), 0});
+            self.append(&.{ @intFromBool(type_value.is_dst), 0 });
         }
         self.append("UTC0");
     }
@@ -346,7 +346,7 @@ test "a DST-only zone falls back to its first type" {
     const zone = fixture.single(0, .{
         .transitions = &.{},
         .indices = &.{},
-        .types =&.{.{ .offset = 7_200, .is_dst = true }},
+        .types = &.{.{ .offset = 7_200, .is_dst = true }},
     });
     try std.testing.expectEqual(@as(?i32, 7_200), offsetAt(zone, 0));
 }
