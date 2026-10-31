@@ -46,7 +46,39 @@ pub fn entry(minimal: std.process.Init.Minimal) u8 {
     return cli.run(cli.parse(argv), host, &store);
 }
 
+/// The test runner speaks its own protocol on file descriptor 1, so anything
+/// that exercises the real output adapter has to send that output elsewhere
+/// while it runs.
+const SilentOutput = struct {
+    saved_stdout: linux.fd_t = -1,
+    saved_stderr: linux.fd_t = -1,
+
+    fn begin() SilentOutput {
+        const null_device = std.posix.openat(linux.AT.FDCWD, "/dev/null", .{
+            .ACCMODE = .WRONLY,
+            .CLOEXEC = true,
+        }, 0) catch unreachable;
+
+        const saved_stdout: linux.fd_t = @intCast(linux.dup(1));
+        const saved_stderr: linux.fd_t = @intCast(linux.dup(2));
+        _ = linux.dup2(null_device, 1);
+        _ = linux.dup2(null_device, 2);
+        _ = linux.close(null_device);
+        return .{ .saved_stdout = saved_stdout, .saved_stderr = saved_stderr };
+    }
+
+    fn end(self: SilentOutput) void {
+        _ = linux.dup2(self.saved_stdout, 1);
+        _ = linux.dup2(self.saved_stderr, 2);
+        _ = linux.close(self.saved_stdout);
+        _ = linux.close(self.saved_stderr);
+    }
+};
+
 test "main dispatches the generated name and version" {
+    const silent = SilentOutput.begin();
+    defer silent.end();
+
     const argv = [_][*:0]const u8{ "prompty", "version" };
     const environment = [_:null]?[*:0]const u8{ "USER=test", "HOME=/home/test", null };
     const minimal = std.process.Init.Minimal{
@@ -57,6 +89,9 @@ test "main dispatches the generated name and version" {
 }
 
 test "main reports a usage error through the exit code" {
+    const silent = SilentOutput.begin();
+    defer silent.end();
+
     const argv = [_][*:0]const u8{ "prompty", "nonsense" };
     const environment = [_:null]?[*:0]const u8{null};
     const minimal = std.process.Init.Minimal{
@@ -67,6 +102,9 @@ test "main reports a usage error through the exit code" {
 }
 
 test "entry survives an empty environment and no arguments" {
+    const silent = SilentOutput.begin();
+    defer silent.end();
+
     const argv = [_][*:0]const u8{"prompty"};
     const environment = [_:null]?[*:0]const u8{null};
     const minimal = std.process.Init.Minimal{
