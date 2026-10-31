@@ -1,0 +1,4 @@
+*zig-*
+coverage
+.zig-cache
+zig-out

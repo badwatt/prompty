@@ -1,0 +1,208 @@
+//! Command line parsing and dispatch. Pure parsing, so every flag combination is
+//! unit tested; `run` is the only part that touches the host.
+
+const std = @import("std");
+
+const canvas = @import("../domain/canvas.zig");
+const prompt = @import("../domain/prompt.zig");
+const store_mod = @import("../domain/store.zig");
+const theme_mod = @import("../domain/theme.zig");
+const ports = @import("../ports/host.zig");
+const compose = @import("compose.zig");
+const metadata = @import("metadata.zig");
+const shell_init = @import("shell_init.zig");
+
+pub const RenderOptions = struct {
+    shell: canvas.Shell = .plain,
+    color: bool = true,
+};
+
+pub const Action = union(enum) {
+    render: RenderOptions,
+    init: canvas.Shell,
+    version,
+    theme,
+    help,
+    invalid: []const u8,
+};
+
+pub const exit_ok = 0;
+pub const exit_usage = 2;
+
+/// `argv[0]` is the program name, as usual.
+pub fn parse(argv: []const []const u8) Action {
+    if (argv.len < 2) return .help;
+    const command = argv[1];
+    const rest = argv[2..];
+
+    if (std.mem.eql(u8, command, "render")) return parseRender(rest);
+    if (std.mem.eql(u8, command, "init")) return parseInit(rest);
+    if (std.mem.eql(u8, command, "version")) return .version;
+    if (std.mem.eql(u8, command, "theme")) return .theme;
+    if (std.mem.eql(u8, command, "help")) return .help;
+    if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) return .help;
+    if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "-V")) return .version;
+    return .{ .invalid = command };
+}
+
+fn parseRender(flags: []const []const u8) Action {
+    var options = RenderOptions{};
+    for (flags) |flag| {
+        if (std.mem.eql(u8, flag, "--no-color")) {
+            options.color = false;
+            continue;
+        }
+        const prefix = "--shell=";
+        if (std.mem.startsWith(u8, flag, prefix)) {
+            options.shell = canvas.Shell.parse(flag[prefix.len..]) orelse
+                return .{ .invalid = flag };
+            continue;
+        }
+        return .{ .invalid = flag };
+    }
+    return .{ .render = options };
+}
+
+fn parseInit(arguments: []const []const u8) Action {
+    if (arguments.len != 1) return .{ .invalid = if (arguments.len == 0) "init" else arguments[1] };
+    const shell = canvas.Shell.parse(arguments[0]) orelse return .{ .invalid = arguments[0] };
+    if (shell == .plain) return .{ .invalid = arguments[0] };
+    return .{ .init = shell };
+}
+
+pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
+    switch (action) {
+        .render => |options| {
+            var buffer: [canvas.Canvas.capacity]u8 = undefined;
+            const model = compose.build(host, store, .{
+                .shell = options.shell,
+                .color = options.color,
+            });
+            host.stdout.write(prompt.render(&model, &buffer));
+            return exit_ok;
+        },
+        .init => |shell| {
+            host.stdout.write(shell_init.script(shell));
+            return exit_ok;
+        },
+        .version => {
+            var buffer: [64]u8 = undefined;
+            const line = std.fmt.bufPrint(&buffer, "{s} {s}\n", .{ metadata.name, metadata.version }) catch
+                return exit_ok;
+            host.stdout.write(line);
+            return exit_ok;
+        },
+        .theme => {
+            writeTheme(host);
+            return exit_ok;
+        },
+        .help => {
+            host.stdout.write(usage);
+            return exit_ok;
+        },
+        .invalid => |offender| {
+            var buffer: [256]u8 = undefined;
+            const message = std.fmt.bufPrint(&buffer, "{s}: unknown argument '{s}'\n", .{
+                metadata.name,
+                offender,
+            }) catch usage;
+            host.stderr.write(message);
+            host.stderr.write(usage);
+            return exit_usage;
+        },
+    }
+}
+
+const usage =
+    "usage: " ++ metadata.name ++ " <command>\n" ++
+    "\n" ++
+    "  render [--shell=zsh|bash|plain] [--no-color]   print the prompt\n" ++
+    "  init zsh|bash                                  print the shell integration\n" ++
+    "  theme                                          print the derived palette\n" ++
+    "  version                                        print name and version\n" ++
+    "\n" ++
+    "Set PROMTY_BACKGROUND=#rrggbb to match your terminal background,\n" ++
+    "and NO_COLOR=1 to disable colours entirely.\n";
+
+fn writeTheme(host: ports.Host) void {
+    const theme = compose.themeFor(host);
+    const entries = [_]struct { label: []const u8, color: theme_mod.Rgb }{
+        .{ .label = "background", .color = theme.background },
+        .{ .label = "user", .color = theme.user_surface },
+        .{ .label = "path", .color = theme.path_surface },
+        .{ .label = "git", .color = theme.git_surface },
+        .{ .label = "text", .color = theme.text },
+        .{ .label = "muted", .color = theme.muted },
+        .{ .label = "green", .color = theme.green },
+        .{ .label = "red", .color = theme.red },
+        .{ .label = "yellow", .color = theme.yellow },
+    };
+    for (entries) |entry| {
+        var hex_buffer: [7]u8 = undefined;
+        var line_buffer: [32]u8 = undefined;
+        const hex = std.fmt.bufPrint(&hex_buffer, "#{x:0>2}{x:0>2}{x:0>2}", .{
+            entry.color.r,
+            entry.color.g,
+            entry.color.b,
+        }) catch return;
+        const line = std.fmt.bufPrint(&line_buffer, "{s:<10} {s}\n", .{ entry.label, hex }) catch return;
+        host.stdout.write(line);
+    }
+}
+
+fn expectParse(expected: Action, argv: []const []const u8) !void {
+    try std.testing.expectEqualDeep(expected, parse(argv));
+}
+
+test "no arguments prints help" {
+    try expectParse(.help, &.{});
+    try expectParse(.help, &.{"prompty"});
+    try expectParse(.help, &.{ "prompty", "help" });
+    try expectParse(.help, &.{ "prompty", "--help" });
+    try expectParse(.help, &.{ "prompty", "-h" });
+}
+
+test "render takes an optional shell and colour switch" {
+    try expectParse(.{ .render = .{} }, &.{ "prompty", "render" });
+    try expectParse(
+        .{ .render = .{ .shell = .zsh, .color = false } },
+        &.{ "prompty", "render", "--shell=zsh", "--no-color" },
+    );
+    try expectParse(
+        .{ .render = .{ .shell = .bash } },
+        &.{ "prompty", "render", "--shell=bash" },
+    );
+    try expectParse(
+        .{ .render = .{ .shell = .plain } },
+        &.{ "prompty", "render", "--shell=plain" },
+    );
+}
+
+test "render rejects unknown flags and shells" {
+    try expectParse(.{ .invalid = "--shell=fish" }, &.{ "prompty", "render", "--shell=fish" });
+    try expectParse(.{ .invalid = "--wat" }, &.{ "prompty", "render", "--wat" });
+    try expectParse(.{ .invalid = "extra" }, &.{ "prompty", "render", "--no-color", "extra" });
+}
+
+test "init requires exactly one supported shell" {
+    try expectParse(.{ .init = .zsh }, &.{ "prompty", "init", "zsh" });
+    try expectParse(.{ .init = .bash }, &.{ "prompty", "init", "bash" });
+    try expectParse(.{ .invalid = "init" }, &.{ "prompty", "init" });
+    try expectParse(.{ .invalid = "fish" }, &.{ "prompty", "init", "fish" });
+    try expectParse(.{ .invalid = "plain" }, &.{ "prompty", "init", "plain" });
+    try expectParse(.{ .invalid = "extra" }, &.{ "prompty", "init", "zsh", "extra" });
+}
+
+test "version has three spellings" {
+    try expectParse(.version, &.{ "prompty", "version" });
+    try expectParse(.version, &.{ "prompty", "--version" });
+    try expectParse(.version, &.{ "prompty", "-V" });
+}
+
+test "theme prints the derived palette" {
+    try expectParse(.theme, &.{ "prompty", "theme" });
+}
+
+test "unknown commands are reported verbatim" {
+    try expectParse(.{ .invalid = "bench" }, &.{ "prompty", "bench" });
+}
