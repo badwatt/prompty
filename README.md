@@ -16,10 +16,10 @@ same directory, default configuration of each prompt:
 
 | where | prompty | starship 1.25.1 |
 | --- | --- | --- |
-| empty directory | **1.04 ms** | 3.08 ms |
-| this repository, `git status` on | **4.92 ms** | 13.73 ms |
-| this repository, `--no-git-status` | **1.05 ms** | — |
-| a directory with 20,000 entries | **1.06 ms** | 87.6 ms |
+| empty directory | **0.97 ms** | 3.08 ms |
+| this repository, `git status` on | **4.5 ms** | 13.73 ms |
+| this repository, `--no-git-status` | **0.97 ms** | — |
+| a directory with 20,000 entries | **0.99 ms** | 87.6 ms |
 | binary size | **60 KiB** | 13.4 MiB |
 
 The difference is what each prompt *looks at*. prompty reads `.git/HEAD`, runs
@@ -123,8 +123,11 @@ with `…`, never written past its buffer.
 ## Fast by construction, careful by default
 
 - **One subprocess, only in a repository:** a single `git status
-  --porcelain=v2 --branch`. Turn it off and the branch comes from `.git/HEAD`.
-  A command that does not answer in two seconds is killed.
+  --porcelain=v2 --branch`. Turn it off and the branch comes from `.git/HEAD`;
+  `PROMTY_GIT_STATUS=fast` keeps the branch and the tree but skips the untracked
+  walk and the divergence walk, which measured 6.4 ms against 9.0 ms in a
+  repository with five thousand files and five hundred untracked ones. A command
+  that does not answer in two seconds is killed.
 - **Nothing proportional to the directory.** No listing, no manifest scan, no
   version probing, no allocation: fixed stack buffers, one `write` per prompt.
 - **No configuration file.** The palette is derived from the terminal background
@@ -145,7 +148,7 @@ with `…`, never written past its buffer.
 | variable | meaning |
 | --- | --- |
 | `PROMTY_BACKGROUND` | `#rrggbb`, overrides the detected terminal background |
-| `PROMTY_GIT_STATUS` | `0`/`false` to skip the `git status` call entirely |
+| `PROMTY_GIT_STATUS` | `fast` for branch and tree only, `0`/`false` to skip the call |
 | `NO_COLOR` | set to anything to disable colour entirely |
 | `PROMTY_LAST_EXIT` | exit status of the previous command, set by the integration |
 | `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration |
@@ -155,8 +158,10 @@ with `…`, never written past its buffer.
 ```sh
 zig build             # 60 KiB static binary, ReleaseFast
 zig build -Dmode=safe # the same code with the safety checks on, for auditing
-zig build test        # 194 unit and integration tests
+zig build test        # 207 unit, integration and property tests
 zig build coverage    # the same tests under kcov, gate at 100% of lines
+zig build smoke       # every command, in the shipping ReleaseFast build
+zig build stack       # a render on a 64 KiB stack
 zig build bench       # measure a real render, fork included
 zig build run -- render --no-color
 nix build .#          # the package, built and tested in a sandbox

@@ -1,29 +1,76 @@
 # Design
 
-## The number
+## The number, measured
 
 A prompt is executed after every command, so its cost is multiplied by
-everything a human does. The budget is therefore set by what the shell already
-pays: `fork` + `exec` of an empty static binary measures 0.58 ms on this
-machine. Anything prompty adds on top of that is the only thing worth
-optimising, and it is currently about 0.14 ms.
+everything a human does. The honest way to budget it is to measure the floor
+first, and the floor is not in this program:
+
+| measurement, this machine, fork+exec included | median |
+| --- | --- |
+| a 4.8 KiB static binary that does nothing but exit | **0.85 ms** |
+| prompty, no repository (`render --no-git-status`) | 0.97 ms |
+| prompty, empty directory | 0.97 ms |
+| prompty, directory with 20,000 entries | 0.99 ms |
+| prompty, this repository, `git status` on | 4.5 ms |
+| `git status --porcelain=v2 --branch` alone | 3.5 ms |
+| `git rev-parse --abbrev-ref HEAD` alone | 1.9 ms |
+
+So of the millisecond a prompt costs outside a repository, **0.85 ms is the
+shell's fork and exec and 0.07 ms is everything prompty does**. There is no
+optimisation left in that 7% worth having; the only way to remove the other 93%
+is to not be `exec`ed, which means a resident process — see the omissions at the
+end.
+
+Inside a repository the picture is different: `git` is 77-90% of the render, and
+most of *that* is git's own startup (`rev-parse`, doing nothing else, is 1.9 ms
+because it is a dynamically linked binary) plus `refresh index`, which `stat`s
+every tracked file. Measured with `GIT_TRACE_PERFORMANCE=1`: 1.0 ms of refresh,
+0.09 ms of diff, and 2.1 ms for the command as a whole.
 
 The budget, in order of what actually costs:
 
-1. **Process startup.** A 70 KiB static binary, no libc, no allocator, no
+1. **Process startup.** A 60 KiB static binary, no libc, no allocator, no
    dynamic linking. The 12 MiB debug build costs 0.4 ms more per prompt purely
    in page faults, which is why `zig build` defaults to ReleaseFast and strips.
-2. **Subprocesses.** `node --version` is 30-60 ms on a cold cache, and running
-   one per toolchain per prompt is the usual way to lose a prompt. prompty
-   spawns exactly one process, and only inside a repository:
-   `git status --porcelain=v2 --branch`, at about 4 ms, which is why the
-   repository case is 5 ms and everything else is 1 ms.
+2. **The one subprocess.** Only inside a repository. Three of the four flags
+   are free to change and one is not: `--untracked-files=no` measured 5.7 ms
+   against 8.4 ms in a repository with 5000 files and 500 untracked ones, which
+   is why `PROMTY_GIT_STATUS=fast` exists — and why it is not the default, since
+   it also removes the `?` glyph.
 3. **Directory listings.** None. A listing costs what the directory holds, not
    what the prompt shows, so the cost of a render must not depend on somebody
-   else's file count.
+   else's file count. The 20,000-entry row above is the proof: same millisecond.
 4. **Syscalls.** 22 on the happy path: a handful of `openat` for `.git`, one
    `clock_gettime`, one `write`. Nothing proportional to the directory.
 5. **Bytes written.** One `write` per prompt, assembled in a 2 KiB stack buffer.
+
+Memory is part of the budget for the same reason: the prompt runs on the shell's
+stack. `zig build stack` renders one under `ulimit -s 64` — the smallest a shell
+may hand us — and that number is a test, not a hope. It was 512 KiB until an
+audit found that a quarter megabyte of it was a file buffer.
+
+### What was measured and rejected
+
+- **`clone(CLONE_VFORK|CLONE_VM)` instead of `fork`.** 131 µs against 53 µs per
+  spawn, measured directly. On a 4.5 ms render that is 78 µs, under two percent,
+  and it costs the one invariant that matters most: with a shared address space
+  every line of the child is load-bearing, and the child starts at the entry
+  function rather than continuing after the call — the first attempt silently
+  skipped the `dup2` that points its stdout at the pipe. Worth two percent
+  nowhere, least of all here.
+- **`git status .` scoped to the working directory.** 4.8 ms against 8.6 ms in a
+  monorepo subdirectory, but it changes what the prompt means: the status of
+  where you are against the status of the project.
+- **A resident status daemon.** The only order-of-magnitude win available (4.5
+  ms back to 0.9 ms), and the reason it is rejected is the rest of this document:
+  a watcher, an invalidation protocol, a second process to clean up after, and
+  two shells disagreeing about which one owns it. The prompt's whole argument is
+  that it cannot be in a broken state.
+- **Streaming the porcelain through the parser.** Removes the 256 KiB static
+  buffer and the ceiling at roughly fifteen thousand changes, and costs a
+  callback-shaped hole through the `Command` port for a case that a `git status`
+  this size already loses on time. The buffer is BSS: it costs nothing to hold.
 
 ## The hexagon
 
@@ -168,15 +215,23 @@ what makes `programs.prompty.enable = true;` sufficient.
 
 ## Testing
 
-- 142 tests: pure domain tests plus integration tests that drive the whole use
-  case through the ports against a fake filesystem, clock, terminal and
-  environment.
+- 207 tests: pure domain tests, integration tests that drive the whole use case
+  through the ports against a fake filesystem, clock, terminal and environment,
+  and property tests that drive a seeded generator through the parsers. The
+  property tests are the general form of the overflow class an audit found by
+  hand: whatever bytes arrive, the label is bounded and valid, the record is
+  never indexed past its end, the offset is inside a day.
 - 100% line coverage, enforced by `zig build coverage`: the test binary runs
   under kcov, the installed binary is traced through ten real CLI invocations,
   and `tools/check_coverage.zig` fails the build if any file in `src/` is below
   100% or missing from the report.
-- The Linux adapters are covered by tests that use real pipes, real sockets and
-  a real scratch directory, because a fake proves nothing about `getdents64`.
+- The Linux adapters are covered by tests that use real pipes, a real
+  pseudo-terminal and a real scratch directory, because a fake proves nothing
+  about `tcsetattr` or `getcwd`.
+- `zig build smoke` runs every command in the shipping ReleaseFast build, and
+  `zig build stack` renders under a 64 KiB stack: the first catches a program
+  that only works in Debug, the second catches a buffer that grew back into the
+  megabytes. Both run in CI, together with the coverage gate.
 - Tests are always built with LLVM in Debug: kcov reads DWARF that the
   self-hosted backend does not emit for user files.
 
@@ -199,7 +254,9 @@ rather than a fast approximation that lies about a dirty tree.
   in a build tree.
 - **Config files.** Every option is a reason for the prompt to read another file
   and for the user to spend an evening tuning it. The palette comes from the
-  terminal; the rest is a judgement call, made once.
+  terminal; the rest is a judgement call, made once. The one knob that earns its
+  place is `PROMTY_GIT_STATUS`, because it is worth a third of the render in a
+  large repository.
 - **Cross-platform adapters.** The ports are portable and the domain is pure,
   but the only adapter set is Linux. A macOS adapter is a new file behind the
   same five ports, not a rewrite.
