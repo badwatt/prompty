@@ -70,8 +70,9 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: tag
-    if: needs.tag.outputs.created == 'true'
+    # It attaches the artifacts, so the build has to have finished first.
+    needs: [tag, build]
+    if: needs.tag.outputs.created == 'true' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

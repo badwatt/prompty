@@ -164,6 +164,11 @@ nix build .#          # the package, built and tested in a sandbox
 
 `zig build coverage` needs `kcov` (override with `-Dkcov=...`).
 
+CI runs `fmt:check` and the test suite on every push and pull request. Bumping
+the version in `build.zig.zon` and pushing to `main` tags that version and
+publishes a release with static `x86_64-linux` and `aarch64-linux` binaries, a
+changelog built from the commits and a `SHA256SUMS` file.
+
 ## Requirements
 
 Linux, Zig 0.17, and a terminal that answers the OSC 11 background query (or
