@@ -15,6 +15,7 @@ test {
     _ = @import("domain/clock.zig");
     _ = @import("domain/duration.zig");
     _ = @import("domain/git.zig");
+    _ = @import("domain/git_status.zig");
     _ = @import("domain/language.zig");
     _ = @import("domain/osc.zig");
     _ = @import("domain/path.zig");
@@ -26,6 +27,7 @@ test {
     _ = @import("ports/host.zig");
 
     _ = @import("adapters/linux/clock.zig");
+    _ = @import("adapters/linux/command.zig");
     _ = @import("adapters/linux/env.zig");
     _ = @import("adapters/linux/fs.zig");
     _ = @import("adapters/linux/out.zig");

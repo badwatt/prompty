@@ -4,7 +4,7 @@ A terminal prompt obsessed with one number: the time between pressing Enter and
 seeing the next prompt.
 
 ```
-  badwatt   ~/Projects/code/prompty   main    zig 0.17.0   14:32   1.2s ❯
+  badwatt   ~/Projects/code/prompty    main ✘!+?   zig 0.17.0   14:32   1.2s ❯
 ```
 
 One line. Three powerline surfaces that fade into your terminal's own
@@ -12,20 +12,26 @@ background, then dim detail, then the chevron. Zero configuration.
 
 | | median | p95 | binary |
 |---|---|---|---|
-| **prompty** | **0.97 ms** | 1.10 ms | 70 KiB |
-| a prompt that shells out for git and toolchain versions | 10.56 ms | 11.63 ms | 12 MiB |
+| **prompty, no repository** | **0.7 ms** | 0.9 ms | 70 KiB |
+| **prompty, repository (git status on)** | **5.0 ms** | 6.4 ms | 70 KiB |
+| **prompty, `--no-git-status`** | **1.1 ms** | 1.4 ms | 70 KiB |
+| a prompt that shells out for everything | 10.56 ms | 11.63 ms | 12 MiB |
 
-Measured on the same repository with `zig build bench` (300 forks, fork and exec
-included; see `tools/bench.zig`). The second row is the same measurement of
-`starship prompt` on this machine.
+Measured with `zig build bench` (300 forks, fork and exec included; see
+`tools/bench.zig`). The last row is the same measurement of `starship prompt` on
+this machine, in the same repository, with the same `git status` it also runs.
 
 ## Why it is fast
 
-- **No subprocesses.** Not one. The branch comes from `.git/HEAD`, the project
-  type from a single `getdents64`, the versions from the files the project
-  already has (`.zigversion`, `go.mod`, `rust-toolchain.toml`, `.nvmrc`), and
-  the clock from `CLOCK_REALTIME` plus the TZif file. Shelling out to `git` or
-  `node --version` costs more than the entire render.
+- **One subprocess in total**, and only inside a repository: a single
+  `git status --porcelain=v2 --branch` for the branch state, the change counts
+  and the upstream divergence. Everything else is file reads: the project type
+  from one `getdents64`, the versions from files the project already carries
+  (`.zigversion`, `go.mod`, `rust-toolchain.toml`, `.nvmrc`), the clock from
+  `CLOCK_REALTIME` plus the TZif file, the stash from `refs/stash`. No
+  `node --version`, no `go version`, no second fork.
+- **A way out of even that.** `--no-git-status` (or `PROMTY_GIT_STATUS=0`) drops
+  the git call and renders the branch from `.git/HEAD` alone, for 1.1 ms.
 - **No allocation.** Every buffer is a fixed-size stack array; the whole program
   is a static binary with six syscalls on the happy path.
 - **No configuration.** The palette is derived from your terminal background in
@@ -64,6 +70,7 @@ icons and the clock come from the same range).
 
 ```
 prompty render [--shell=zsh|bash|plain] [--no-color]   print the prompt
+               [--no-git-status]                       skip the git call
 prompty init zsh|bash                                  print the shell integration
 prompty theme [detect [--force]]                       print (or redetect) the palette
 prompty version                                        print name and version
@@ -75,8 +82,10 @@ prompty version                                        print name and version
 |---|---|---|
 | user | `$USER`, coloured for root | — |
 | directory | `$PWD`, `~` for home, last three components where `~` counts as one | — |
-| branch | `.git/HEAD`, `.git` gitfiles for worktrees, detached heads | ~4 reads |
+| branch | `git status --branch`, or `.git/HEAD` with `--no-git-status` | one process |
+| status | `$all_status`: `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, with no counts | (same call) |
 | operation | `rebase-merge`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `BISECT_LOG` | 5 stat-only opens |
+| stash | `.git/refs/stash` or its reflog | 2 opens |
 | languages | one directory listing, then a version file per project | 1 read + 1 per language |
 | direnv | `$DIRENV_DIFF` | — |
 | exit status | `$PROMTY_LAST_EXIT` | — |
@@ -102,14 +111,29 @@ Inside a repository the label is anchored on the repository name — that is
 starship's `truncate_to_repo`, which is on by default — so the ancestors above
 the repository are replaced by `…/`.
 
+### Git
+
+The branch, the working tree state and the upstream divergence are exactly what
+`git status --porcelain=v2 --branch` reports, rendered with the same symbols and
+in the same order as the prompt this replaces: `=` conflict, `$` stash, `✘`
+deleted, `»` renamed, `!` modified, `+` staged, `?` untracked, then `⇕` diverged
+or `⇡`/`⇣`.
+
+That is one process, and it is the only one prompty ever runs: it costs about
+4 ms, which is the bulk of the 5 ms repository figure above. Parsing the index
+directly instead would be faster but wrong (ignore rules, submodules, sparse
+checkouts), and being subtly wrong about git status is worse than being slow.
+When it is not worth 4 ms, turn it off:
+
+```sh
+PROMTY_GIT_STATUS=0        # or: prompty render --no-git-status
+```
+
 ### What it deliberately does not do
 
-- **No `git status`.** Counting modified files means stat-ing the whole index or
-  spawning `git`; both cost more than everything else combined. The branch and
-  the operation are cheap, so those stay.
-- **No ahead/behind counts.** That needs a commit-graph walk.
 - **No version numbers from toolchains.** prompty shows what the project pins,
   never what happens to be installed.
+- **No commit-graph walk beyond what git reports** for ahead/behind.
 
 ## Environment
 
@@ -117,6 +141,7 @@ the repository are replaced by `…/`.
 |---|---|
 | `PROMTY_BACKGROUND` | `#rrggbb`, overrides the detected terminal background |
 | `NO_COLOR` | set to anything to disable colour entirely |
+| `PROMTY_GIT_STATUS` | `0`/`false` to skip the `git status` call entirely |
 | `PROMTY_LAST_EXIT` | exit status of the previous command, set by the integration |
 | `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration |
 

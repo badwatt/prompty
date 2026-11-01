@@ -15,6 +15,7 @@ const shell_init = @import("shell_init.zig");
 pub const RenderOptions = struct {
     shell: canvas.Shell = .plain,
     color: bool = true,
+    git_status: bool = true,
 };
 
 pub const ThemeOptions = struct {
@@ -57,6 +58,10 @@ fn parseRender(flags: []const []const u8) Action {
             options.color = false;
             continue;
         }
+        if (std.mem.eql(u8, flag, "--no-git-status")) {
+            options.git_status = false;
+            continue;
+        }
         const prefix = "--shell=";
         if (std.mem.startsWith(u8, flag, prefix)) {
             options.shell = canvas.Shell.parse(flag[prefix.len..]) orelse
@@ -96,6 +101,7 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
             const model = compose.build(host, store, .{
                 .shell = options.shell,
                 .color = options.color,
+                .git_status = options.git_status,
             });
             host.stdout.write(prompt.render(&model, &buffer));
             return exit_ok;
@@ -137,6 +143,7 @@ const usage =
     "usage: " ++ metadata.name ++ " <command>\n" ++
     "\n" ++
     "  render [--shell=zsh|bash|plain] [--no-color]   print the prompt\n" ++
+    "         [--no-git-status]                        skip the git status call\n" ++
     "  init zsh|bash                                  print the shell integration\n" ++
     "  theme                                          print the derived palette\n" ++
     "  version                                        print name and version\n" ++
@@ -215,6 +222,10 @@ test "render takes an optional shell and colour switch" {
     try expectParse(
         .{ .render = .{ .shell = .plain } },
         &.{ "prompty", "render", "--shell=plain" },
+    );
+    try expectParse(
+        .{ .render = .{ .git_status = false } },
+        &.{ "prompty", "render", "--no-git-status" },
     );
 }
 

@@ -13,8 +13,10 @@ The budget, in order of what actually costs:
 1. **Process startup.** A 70 KiB static binary, no libc, no allocator, no
    dynamic linking. The 12 MiB debug build costs 0.4 ms more per prompt purely
    in page faults, which is why `zig build` defaults to ReleaseFast and strips.
-2. **Subprocesses.** `git status` is 10-20 ms. `node --version` is 30-60 ms on a
-   cold cache. prompty does not spawn anything, ever.
+2. **Subprocesses.** `node --version` is 30-60 ms on a cold cache, and starship
+   spawns one per language per prompt. prompty spawns exactly one process, and
+   only inside a repository: `git status --porcelain=v2 --branch`, at about
+   4 ms, which is why the repository case is 5 ms and the rest is 0.7 ms.
 3. **Syscalls.** 35 on the happy path: one `getdents64` per project root, a
    handful of `openat` for `.git` and the manifests, one `clock_gettime`.
 4. **Bytes written.** One `write` per prompt, assembled in a 2 KiB stack buffer.
@@ -36,7 +38,7 @@ The budget, in order of what actually costs:
                            │
    ┌───────────────────────▼───────────────────────┐
    │                   ports                       │
-   │   Files   Environ   Clock   Terminal   Output  │
+   │  Files  Environ  Clock  Commands  Terminal  Output │
    └───────────────────────┬───────────────────────┘
                            │
    ┌───────────────────────▼───────────────────────┐
@@ -60,8 +62,12 @@ claims checkable rather than aspirational.
 
 - **No allocation.** Every buffer is a fixed-size stack array or the bounded
   `Store`. `Store.dupe` asserts on overflow instead of growing.
-- **No subprocess.** There is no process port at all, so the property cannot be
-  violated by accident.
+- **One process, one port.** `Commands` exists for the git status call and
+  nothing else; there is no shell, no `sh -c`, and no other caller. Turning it
+  off costs the status and nothing else.
+- **The porcelain parser is pure.** The only dependency on another program
+  collapses into one port call and one function from bytes to counts, so the
+  interesting half is tested without a repository.
 - **Bounded loops.** The git walk is capped at 64 levels and asserts its bound;
   a directory scan is bounded by the kernel's `getdents64` buffer; path
   shortening keeps at most eight display components; `~` occupies one of them
@@ -133,12 +139,19 @@ output is byte-for-byte plain text.
 - Tests are always built with LLVM in Debug: kcov reads DWARF that the
   self-hosted backend does not emit for user files.
 
+## Why git is not parsed by hand
+
+Reading `.git/index` and stat-ing every entry would cost 1-3 ms in a large
+repository and still be wrong: ignore rules, submodules, sparse checkouts,
+`assume-unchanged`, file modes and the commit graph all live in git's head, not
+in the index. Ahead/behind needs a revwalk. The trade chosen here is one
+subprocess at 4 ms with the real answer, plus a documented way to switch it off,
+rather than a fast approximation that lies about a dirty tree.
+
 ## Deliberate omissions
 
-- **`git status`.** The honest implementations are "stat every file in the
-  index" (1-3 ms in a large repository) or "spawn git" (10-20 ms). Both break the
-  budget for information that is one `git status` away.
-- **Ahead/behind.** Requires walking the commit graph.
+- **Toolchain version calls.** `.zigversion`, `go.mod` and friends say what the
+  project pins; `node --version` says what is installed and costs 30-60 ms.
 - **Config files.** Every option is a reason for the prompt to read another file
   and for the user to spend an evening tuning it. The palette comes from the
   terminal; the rest is a judgement call, made once.

@@ -13,6 +13,7 @@ const canvas_mod = @import("canvas.zig");
 const clock_mod = @import("clock.zig");
 const duration_mod = @import("duration.zig");
 const git_mod = @import("git.zig");
+const git_status_mod = @import("git_status.zig");
 const language_mod = @import("language.zig");
 const theme_mod = @import("theme.zig");
 
@@ -24,6 +25,7 @@ pub const Git = struct {
     branch: []const u8,
     operation: git_mod.Operation,
     detached: bool,
+    status: git_status_mod.Status = .{},
 };
 
 pub const Language = struct {
@@ -67,6 +69,21 @@ const powerline = struct {
 
 const bold_on = "\x1b[1m";
 const bold_off = "\x1b[22m";
+
+/// The branch glyph from the terminal setup prompty was built for.
+const branch_glyph = "\u{f113}";
+
+// Symbol for each status category, matching the prompt this replaces.
+const conflicted_glyph = "=";
+const stashed_glyph = "$";
+const deleted_glyph = "\u{2718}";
+const renamed_glyph = "\u{00bb}";
+const modified_glyph = "!";
+const staged_glyph = "+";
+const untracked_glyph = "?";
+const diverged_glyph = "\u{21d5}";
+const ahead_glyph = "\u{21e1}";
+const behind_glyph = "\u{21e3}";
 
 const direnv_glyph = "\u{f0d6e}";
 const clock_glyph = "\u{f051a}";
@@ -112,12 +129,18 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         surface = model.theme.git_surface;
         paint(&canvas, model.theme.text, surface);
         canvas.text(" ");
+        canvas.text(branch_glyph);
+        canvas.text(" ");
         canvas.text(repo.branch);
         if (repo.operation != .none) {
             paint(&canvas, model.theme.yellow, surface);
             canvas.text(" ");
             canvas.text(repo.operation.label());
             paint(&canvas, model.theme.text, surface);
+        }
+        if (!repo.status.isClean()) {
+            canvas.text(" ");
+            writeStatus(&canvas, repo.status);
         }
         canvas.text(" ");
     }
@@ -173,6 +196,27 @@ fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
 
 /// The dim detail after the pill: separated by two spaces, one colour change
 /// per item and nothing else.
+/// The status symbols, in the order the prompt being replaced shows them:
+/// conflicts first, then the worktree state, then how far the branch has
+/// drifted from its upstream.
+fn writeStatus(canvas: *Canvas, status: git_status_mod.Status) void {
+    if (status.conflicted > 0) canvas.text(conflicted_glyph);
+    if (status.stashed > 0) canvas.text(stashed_glyph);
+    if (status.deleted > 0) canvas.text(deleted_glyph);
+    if (status.renamed > 0) canvas.text(renamed_glyph);
+    if (status.modified > 0) canvas.text(modified_glyph);
+    if (status.staged > 0) canvas.text(staged_glyph);
+    if (status.untracked > 0) canvas.text(untracked_glyph);
+    // Divergence is one symbol, never two.
+    if (status.isDiverged()) {
+        canvas.text(diverged_glyph);
+    } else if (status.ahead > 0) {
+        canvas.text(ahead_glyph);
+    } else if (status.behind > 0) {
+        canvas.text(behind_glyph);
+    }
+}
+
 const Extras = struct {
     canvas: *Canvas,
     theme: *const theme_mod.Theme,
@@ -251,7 +295,7 @@ test "renders the full line without colour" {
     }, &.{.{ .kind = .zig, .version = "0.17.0" }});
     try std.testing.expectEqualStrings(
         "\n" ++
-            "\u{e0b6} badwatt \u{e0b0} ~/src/prompty \u{e0b0} main \u{e0b0}" ++
+            "\u{e0b6} badwatt \u{e0b0} ~/src/prompty \u{e0b0} \u{f113} main \u{e0b0}" ++
             " \u{e6a9} 0.17.0  1.2s  \u{f051a} 12:04 \u{276f} ",
         renderToString(&model),
     );
@@ -380,7 +424,7 @@ test "detached heads and in-progress operations are visible" {
         .git = .{ .branch = "a1b2c3d", .operation = .rebase, .detached = true },
     };
     try std.testing.expectEqualStrings(
-        "\n\u{e0b6} ~/repo \u{e0b0} a1b2c3d rebase \u{e0b0} \u{276f} ",
+        "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} a1b2c3d rebase \u{e0b0} \u{276f} ",
         renderToString(&model),
     );
 }
@@ -403,6 +447,81 @@ test "failure, direnv and several languages all appear" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{f0d6e}") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{2718}130") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "dev merge") != null);
+}
+
+test "the branch carries its glyph and the status carries its symbols" {
+    const dirty = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/repo",
+        .git = .{
+            .branch = "main",
+            .operation = .none,
+            .detached = false,
+            .status = .{
+                .deleted = 1,
+                .modified = 1,
+                .staged = 1,
+                .untracked = 1,
+            },
+        },
+    };
+    // The same shape the prompt this replaces prints for that state.
+    try std.testing.expectEqualStrings(
+        "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} main \u{2718}!+? \u{e0b0} \u{276f} ",
+        renderToString(&dirty),
+    );
+
+    const upstream = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/repo",
+        .git = .{ .branch = "main", .operation = .none, .detached = false, .status = .{ .ahead = 1 } },
+    };
+    try std.testing.expect(std.mem.indexOf(u8, renderToString(&upstream), " \u{21e1} ") != null);
+
+    const behind = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/repo",
+        .git = .{ .branch = "main", .operation = .none, .detached = false, .status = .{ .behind = 2 } },
+    };
+    try std.testing.expect(std.mem.indexOf(u8, renderToString(&behind), " \u{21e3} ") != null);
+
+    // Diverged is a single symbol, never both arrows.
+    const diverged = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/repo",
+        .git = .{
+            .branch = "main",
+            .operation = .none,
+            .detached = false,
+            .status = .{ .ahead = 1, .behind = 1 },
+        },
+    };
+    const rendered = renderToString(&diverged);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{21d5}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{21e1}") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{21e3}") == null);
+}
+
+test "a status of conflicts and stashes leads the row" {
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/repo",
+        .git = .{
+            .branch = "main",
+            .operation = .none,
+            .detached = false,
+            .status = .{ .conflicted = 1, .stashed = 1, .renamed = 1 },
+        },
+    };
+    try std.testing.expectEqualStrings(
+        "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} main =$\u{00bb} \u{e0b0} \u{276f} ",
+        renderToString(&model),
+    );
 }
 
 test "a successful exit status is not rendered" {

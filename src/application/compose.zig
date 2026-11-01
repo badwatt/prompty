@@ -11,6 +11,7 @@ const cache_mod = @import("../domain/cache.zig");
 const canvas = @import("../domain/canvas.zig");
 const clock_mod = @import("../domain/clock.zig");
 const git_mod = @import("../domain/git.zig");
+const git_status_mod = @import("../domain/git_status.zig");
 const language_mod = @import("../domain/language.zig");
 const osc_mod = @import("../domain/osc.zig");
 const path_mod = @import("../domain/path.zig");
@@ -23,6 +24,9 @@ pub const Options = struct {
     shell: canvas.Shell = .plain,
     color: bool = true,
     keep_components: u8 = 3,
+    /// Ask git for the working tree status. One process, once per prompt, only
+    /// inside a repository. Turn it off for the absolute fastest path.
+    git_status: bool = true,
 };
 
 /// The most directory levels prompty will walk looking for a repository. A
@@ -48,9 +52,19 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     const working_directory = workingDirectory(host, &working_directory_buffer);
 
     // The repository is looked up before the path is formatted: inside one, the
-    // label is anchored on its name rather than on home.
-    const repository = probeRepository(host, working_directory, store);
-    if (repository) |found| model.git = found.git;
+    // label is anchored on its name rather than on home. Both the root and the
+    // git directory borrow this buffer, so it lives here, in the caller.
+    var git_dir_buffer: [path_mod.max_display_bytes * 2]u8 = undefined;
+    const repository = probeRepository(host, working_directory, store, &git_dir_buffer);
+    if (repository) |found| {
+        model.git = found.git;
+        if (options.git_status and !statusDisabled(host)) {
+            if (readStatus(host)) |report| {
+                model.git = withStatus(found.git, report, store);
+            }
+        }
+        if (hasStash(host, found.git_dir)) model.git.?.status.stashed = 1;
+    }
 
     var display_buffer: [path_mod.max_display_bytes]u8 = undefined;
     model.path = store.dupe(path_mod.display(&display_buffer, .{
@@ -119,6 +133,54 @@ pub fn rememberBackground(host: ports.Host, color: theme_mod.Rgb) bool {
     return host.files.write(location, contents);
 }
 
+/// `git status` is the one subprocess a prompt may run, and it is worth asking
+/// whether the user wants it: this is the difference between a render that
+/// costs one millisecond and one that costs five.
+fn statusDisabled(host: ports.Host) bool {
+    const value = host.environ.get("PROMTY_GIT_STATUS") orelse return false;
+    return std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "false");
+}
+
+/// The porcelain output carries the branch too, so it wins when available: one
+/// source of truth per render beats two that can disagree.
+fn withStatus(base: prompt.Git, report: git_status_mod.Report, store: *store_mod.Store) prompt.Git {
+    var git = base;
+    if (report.branch) |branch| {
+        git.branch = store.dupe(branch);
+        git.detached = false;
+    } else if (report.detached) {
+        if (report.commit) |commit| git.branch = store.dupe(git_mod.short(commit));
+        git.detached = true;
+    }
+    git.status = report.status;
+    return git;
+}
+
+fn readStatus(host: ports.Host) ?git_status_mod.Report {
+    // 64 KiB is far more than any prompt needs: a repository with tens of
+    // thousands of changes fills it, and the truncated read then fails cleanly
+    // rather than being parsed halfway.
+    var output: [64 * 1024]u8 = undefined;
+    const argv = [_][:0]const u8{
+        "git",
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "--untracked-files=normal",
+        "-z",
+    };
+    const records = host.commands.run(&argv, &output) orelse return null;
+    return git_status_mod.parse(records);
+}
+
+fn hasStash(host: ports.Host, git_dir: []const u8) bool {
+    var scratch: [path_mod.max_display_bytes * 2]u8 = undefined;
+    if (existsIn(host, git_dir, "refs/stash", &scratch)) return true;
+    // A packed or reflog-only stash still counts.
+    return existsIn(host, git_dir, "logs/refs/stash", &scratch);
+}
+
 fn colorAllowed(host: ports.Host) bool {
     if (host.environ.get("NO_COLOR") != null) return false;
     if (host.environ.get("TERM")) |term| {
@@ -163,6 +225,7 @@ const Located = struct {
 
 const Probe = struct {
     root: []const u8,
+    git_dir: []const u8,
     git: prompt.Git,
 };
 
@@ -170,8 +233,9 @@ fn probeRepository(
     host: ports.Host,
     working_directory: []const u8,
     store: *store_mod.Store,
+    git_dir_buffer: []u8,
 ) ?Probe {
-    var git_dir_buffer: [path_mod.max_display_bytes * 2]u8 = undefined;
+    std.debug.assert(git_dir_buffer.len >= path_mod.max_display_bytes * 2);
     var head_buffer: [git_mod.max_head_bytes]u8 = undefined;
 
     var directory = working_directory;
@@ -181,7 +245,7 @@ fn probeRepository(
         // the assertion is the loop's bound.
         std.debug.assert(walked < max_git_walk);
         walked += 1;
-        if (locate(host, directory, &git_dir_buffer, &head_buffer)) |located| {
+        if (locate(host, directory, git_dir_buffer, &head_buffer)) |located| {
             const operation = operationIn(host, located.git_dir);
             const branch = switch (located.head) {
                 .named => |name| store.dupe(name),
@@ -189,6 +253,7 @@ fn probeRepository(
             };
             return .{
                 .root = located.root,
+                .git_dir = located.git_dir,
                 .git = .{
                     .branch = branch,
                     .operation = operation,
@@ -857,4 +922,140 @@ test "a toolchain file without a usable channel means no version" {
     try std.testing.expectEqual(@as(usize, 2), languages.len);
     try std.testing.expectEqual(@as(?[]const u8, null), languages[0].version);
     try std.testing.expectEqual(@as(?[]const u8, null), languages[1].version);
+}
+
+const status_porcelain =
+    "# branch.oid 1cec0eae51f1f82b5bb5290d9309f73728b04aba\x00" ++
+    "# branch.head main\x00" ++
+    "# branch.upstream origin/main\x00" ++
+    "# branch.ab +2 -1\x00" ++
+    "1 .M N... 100644 100644 100644 aaaaaaa aaaaaaa src/modified.zig\x00" ++
+    "1 M. N... 100644 100644 100644 aaaaaaa aaaaaaa src/staged.zig\x00" ++
+    "1 .D N... 100644 100644 000000 aaaaaaa aaaaaaa src/deleted.zig\x00" ++
+    "? src/untracked.zig\x00";
+
+test "the working tree status comes from one git invocation" {
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.commands.response = status_porcelain;
+
+    const model = harness.model(.{});
+    const git = model.git.?;
+
+    try std.testing.expectEqualStrings("main", git.branch);
+    try std.testing.expect(!git.detached);
+    try std.testing.expectEqual(@as(u16, 1), git.status.modified);
+    try std.testing.expectEqual(@as(u16, 1), git.status.staged);
+    try std.testing.expectEqual(@as(u16, 1), git.status.deleted);
+    try std.testing.expectEqual(@as(u16, 1), git.status.untracked);
+    try std.testing.expectEqual(@as(u16, 2), git.status.ahead);
+    try std.testing.expectEqual(@as(u16, 1), git.status.behind);
+    try std.testing.expectEqual(@as(usize, 1), harness.host.commands.calls);
+}
+
+test "the porcelain branch wins over the one read from disk" {
+    const sources = [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/.git/HEAD", .contents = "ref: refs/heads/stale\n" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.commands.response = status_porcelain;
+
+    try std.testing.expectEqualStrings("main", harness.model(.{}).git.?.branch);
+}
+
+test "a detached repository keeps the short commit from the porcelain" {
+    const detached =
+        "# branch.oid a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\x00" ++
+        "# branch.head (detached)\x00";
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.commands.response = detached;
+
+    const git = harness.model(.{}).git.?;
+    try std.testing.expect(git.detached);
+    try std.testing.expectEqualStrings("a1b2c3d", git.branch);
+}
+
+test "status can be switched off by the caller or the environment" {
+    {
+        var harness = FakeHarness.init(&default_environment);
+        harness.host.commands.response = status_porcelain;
+        const model = harness.model(.{ .git_status = false });
+        try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
+        try std.testing.expect(model.git.?.status.isClean());
+        // The branch still comes from the files.
+        try std.testing.expectEqualStrings("main", model.git.?.branch);
+    }
+    {
+        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+            .{ "PROMTY_GIT_STATUS", "0" },
+        }));
+        harness.host.commands.response = status_porcelain;
+        try std.testing.expect(harness.model(.{}).git.?.status.isClean());
+        try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
+    }
+    {
+        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+            .{ "PROMTY_GIT_STATUS", "false" },
+        }));
+        harness.host.commands.response = status_porcelain;
+        try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
+    }
+    {
+        // Anything else leaves it on.
+        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+            .{ "PROMTY_GIT_STATUS", "1" },
+        }));
+        harness.host.commands.response = status_porcelain;
+        _ = harness.model(.{});
+        try std.testing.expectEqual(@as(usize, 1), harness.host.commands.calls);
+    }
+}
+
+test "a failing git leaves the fast path intact" {
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.commands.response = null;
+
+    const git = harness.model(.{}).git.?;
+    try std.testing.expectEqual(@as(usize, 1), harness.host.commands.calls);
+    try std.testing.expectEqualStrings("main", git.branch);
+    try std.testing.expect(git.status.isClean());
+}
+
+test "garbage from git is a failure, not a wrong prompt" {
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.commands.response = "not porcelain at all";
+    const git = harness.model(.{}).git.?;
+    try std.testing.expectEqualStrings("main", git.branch);
+    try std.testing.expect(git.status.isClean());
+}
+
+test "a stash is visible without asking git" {
+    const sources = project_sources ++ [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/.git/refs/stash", .contents = "aaa\n" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.commands.response = null;
+
+    try std.testing.expectEqual(@as(u16, 1), harness.model(.{}).git.?.status.stashed);
+}
+
+test "a stashed reflog alone also counts" {
+    const sources = project_sources ++ [_]fakes.FakeFiles.File{
+        .{ .path = "/home/dev/proj/.git/logs/refs/stash", .contents = "aaa\n" },
+    };
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &sources;
+    harness.host.commands.response = null;
+
+    try std.testing.expectEqual(@as(u16, 1), harness.model(.{}).git.?.status.stashed);
+}
+
+test "no repository means no git call at all" {
+    var harness = FakeHarness.init(&default_environment);
+    harness.host.files.sources = &.{};
+    harness.host.commands.response = status_porcelain;
+
+    try std.testing.expectEqual(@as(?prompt.Git, null), harness.model(.{}).git);
+    try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
 }

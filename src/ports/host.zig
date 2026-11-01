@@ -96,6 +96,24 @@ pub const Output = struct {
     }
 };
 
+/// Runs an external command as an argument vector — never through a shell —
+/// and hands back its standard output. Null means "could not run, or it
+/// failed": for a prompt that is a dead end, not an error.
+pub const Command = struct {
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        run: *const fn (ptr: *anyopaque, argv: []const [:0]const u8, stdout: []u8) ?[]const u8,
+    };
+
+    pub fn run(self: Command, argv: []const [:0]const u8, stdout: []u8) ?[]const u8 {
+        std.debug.assert(argv.len > 0);
+        std.debug.assert(stdout.len > 0);
+        return self.vtable.run(self.ptr, argv, stdout);
+    }
+};
+
 /// The terminal itself, questioned only when the user asks for it: an OSC
 /// round trip is far too expensive for a prompt, but perfectly fine once.
 pub const Terminal = struct {
@@ -115,6 +133,7 @@ pub const Host = struct {
     files: Files,
     environ: Environ,
     clock: Clock,
+    commands: Command,
     terminal: Terminal,
     stdout: Output,
     stderr: Output,

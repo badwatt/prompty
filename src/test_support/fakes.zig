@@ -176,6 +176,29 @@ pub const FakeOutput = struct {
     }
 };
 
+pub const FakeCommand = struct {
+    response: ?[]const u8 = null,
+    /// The last argument vector, joined for easy assertions.
+    last_argv: []const u8 = "",
+    calls: usize = 0,
+
+    pub fn command(self: *FakeCommand) ports.Command {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+
+    const vtable = ports.Command.VTable{ .run = run };
+
+    fn run(ptr: *anyopaque, argv: []const [:0]const u8, stdout: []u8) ?[]const u8 {
+        const self: *FakeCommand = @ptrCast(@alignCast(ptr));
+        self.calls += 1;
+        if (argv.len > 0) self.last_argv = argv[0];
+        const response = self.response orelse return null;
+        const length = @min(response.len, stdout.len);
+        @memcpy(stdout[0..length], response[0..length]);
+        return stdout[0..length];
+    }
+};
+
 pub const FakeTerminal = struct {
     response: ?[]const u8 = null,
 
@@ -201,6 +224,7 @@ pub const FakeHost = struct {
     environment: FakeEnv,
     clock: FakeClock,
     terminal: FakeTerminal,
+    commands: FakeCommand = .{},
     out: FakeOutput = .{},
     diagnostics: FakeOutput = .{},
     user_id: u32 = 1000,
@@ -210,6 +234,7 @@ pub const FakeHost = struct {
             .files = self.files.files(),
             .environ = self.environment.environ(),
             .clock = self.clock.clock(),
+            .commands = self.commands.command(),
             .terminal = self.terminal.terminal(),
             .stdout = self.out.output(),
             .stderr = self.diagnostics.output(),
