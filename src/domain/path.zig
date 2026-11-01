@@ -116,17 +116,30 @@ fn assemble(out: []u8, parts: Parts) []const u8 {
     const truncated = parts.always_truncated or total > parts.keep;
     var written: usize = 0;
     if (truncated) {
-        written = append(out, written, truncation_symbol);
+        written = clip(out, written, truncation_symbol);
     } else if (parts.rooted) {
-        written = append(out, written, "/");
+        written = clip(out, written, "/");
     }
 
     for (tail[0..tail_length], 0..) |component, position| {
-        if (position > 0) written = append(out, written, "/");
-        written = append(out, written, component);
+        if (position > 0) written = clip(out, written, "/");
+        if (written + component.len > out.len) {
+            // A single name can be longer than the whole budget. Keep the room
+            // for the marker, so the label says it was cut instead of ending
+            // mid-word.
+            written = clip(out[0 .. out.len - ellipsis.len], written, component);
+            written = clip(out, written, ellipsis);
+            break;
+        }
+        written = clip(out, written, component);
     }
+
+    std.debug.assert(written > 0);
+    std.debug.assert(written <= out.len);
     return out[0..written];
 }
+
+const ellipsis = "\u{2026}";
 
 fn push(tail: *[max_keep][]const u8, length: *usize, keep: u8, component: []const u8) void {
     if (length.* < keep) {
@@ -155,10 +168,21 @@ fn baseName(path: []const u8) []const u8 {
     return path;
 }
 
-fn append(out: []u8, at: usize, content: []const u8) usize {
-    std.debug.assert(at + content.len <= out.len);
-    @memcpy(out[at..][0..content.len], content);
-    return at + content.len;
+/// Copies as much of `content` as fits, never past the end of `out` and never
+/// through the middle of a UTF-8 character, and returns the new length.
+///
+/// The prompt has a fixed budget: a directory name is not allowed to overflow
+/// it. This is not a defensive nicety — with the safety checks off, an
+/// over-long path wrote past the buffer and corrupted the stack.
+fn clip(out: []u8, at: usize, content: []const u8) usize {
+    std.debug.assert(at <= out.len);
+    const room = out.len - at;
+    var length = @min(content.len, room);
+    if (length < content.len) {
+        while (length > 0 and (content[length] & 0xc0) == 0x80) length -= 1;
+    }
+    @memcpy(out[at..][0..length], content[0..length]);
+    return at + length;
 }
 
 fn trimTrailingSlashes(path: []const u8) []const u8 {
@@ -283,4 +307,60 @@ test "the anchor name is the last component of the repository root" {
     try std.testing.expectEqualStrings("x", baseName("/x"));
     // A root without a separator still has a name.
     try std.testing.expectEqualStrings("prompty", baseName("prompty"));
+}
+
+/// Whatever the input, the label fits, is valid UTF-8 and says when it was cut.
+fn expectBounded(input: Input) !void {
+    var buffer: [max_display_bytes]u8 = undefined;
+    const label = display(&buffer, input);
+    try std.testing.expect(label.len <= max_display_bytes);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(label));
+    try std.testing.expect(label.len > 0);
+}
+
+test "a name longer than the whole budget is cut, not overflowed" {
+    var name: [4000]u8 = @splat('a');
+    var cwd_buffer: [4100]u8 = undefined;
+    @memcpy(cwd_buffer[0..5], "/tmp/");
+    @memcpy(cwd_buffer[5..][0..name.len], &name);
+    const cwd = cwd_buffer[0 .. 5 + name.len];
+
+    var out: [max_display_bytes]u8 = undefined;
+    const label = display(&out, .{ .cwd = cwd, .home = "/tmp" });
+    try std.testing.expect(label.len <= max_display_bytes);
+    try std.testing.expect(std.mem.endsWith(u8, label, ellipsis));
+    try std.testing.expect(std.unicode.utf8ValidateSlice(label));
+}
+
+test "cutting never splits a multi-byte character" {
+    // Multi-byte names that straddle the boundary, at every offset.
+    const pieces = "ñ日本語🚀";
+    var cwd: [2048]u8 = undefined;
+    var length: usize = 0;
+    length += (try std.fmt.bufPrint(cwd[length..], "/home/dev/", .{})).len;
+    while (length + 3 * pieces.len < cwd.len) {
+        @memcpy(cwd[length..][0 .. 3 * pieces.len], (pieces ++ pieces ++ pieces));
+        length += 3 * pieces.len;
+    }
+    var out: [max_display_bytes]u8 = undefined;
+    const label = display(&out, .{ .cwd = cwd[0..length], .home = "/home/dev" });
+    try std.testing.expect(label.len <= max_display_bytes);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(label));
+}
+
+test "three long components are all bounded" {
+    var long: [300]u8 = @splat('x');
+    var cwd: [1024]u8 = undefined;
+    const path = try std.fmt.bufPrint(&cwd, "/home/dev/{s}/{s}/{s}", .{ &long, &long, &long });
+    try expectBounded(.{ .cwd = path, .home = "/home/dev" });
+}
+
+test "a label that fills the budget exactly is not marked as cut" {
+    var out: [max_display_bytes]u8 = undefined;
+    var cwd: [max_display_bytes]u8 = undefined;
+    @memset(&cwd, 'y');
+    cwd[0] = '/';
+    const label = display(&out, .{ .cwd = &cwd });
+    try std.testing.expectEqual(@as(usize, max_display_bytes), label.len);
+    try std.testing.expect(!std.mem.endsWith(u8, label, ellipsis));
 }

@@ -269,6 +269,8 @@ fn fixtureTheme() theme_mod.Theme {
 
 const plain_buffer_size = Canvas.capacity;
 
+const path_mod = @import("path.zig");
+
 fn renderToString(model: *const Model) []const u8 {
     const buffer = struct {
         var bytes: [plain_buffer_size]u8 = undefined;
@@ -598,23 +600,55 @@ test "bash output wraps every escape and quotes backslashes" {
 }
 
 test "the buffer bound is never exceeded by a maximal prompt" {
-    const long_component: [100]u8 = @splat('a');
-    const model = withLanguages(.{
+    // Every field at the largest size the rest of the program can hand over:
+    // a path clipped to its budget, a branch at its limit, five languages with
+    // versions at theirs, every marker on, and zsh's escape wrappers.
+    var path_buffer: [path_mod.max_display_bytes]u8 = @splat('a');
+    const user_buffer: [64]u8 = @splat('u');
+    var branch_buffer: [git_mod.max_head_bytes]u8 = @splat('b');
+    const versions = [_][]const u8{ "0.17.0", "1.80.0", "1.22.3", "20.11.0", "dev-2024-01" };
+
+    const base = Model{
         .theme = fixtureTheme(),
-        .user = "averyveryverylongusername",
-        .path = "~/" ++ long_component ++ "/" ++ long_component ++ "/" ++ long_component,
-        .git = .{ .branch = "feature/" ++ long_component, .operation = .cherry_pick, .detached = false },
+        .shell = .zsh,
+        .user = &user_buffer,
+        .is_root = true,
+        .path = &path_buffer,
+        .git = .{
+            .branch = &branch_buffer,
+            .operation = .cherry_pick,
+            .detached = false,
+            .status = .{
+                .conflicted = 1,
+                .stashed = 1,
+                .deleted = 1,
+                .renamed = 1,
+                .modified = 1,
+                .staged = 1,
+                .untracked = 1,
+                .ahead = 1,
+                .behind = 1,
+            },
+        },
         .time = .{ .hour = 23, .minute = 59 },
-        .duration_ms = 10_000,
+        .duration_ms = 86_400_000,
         .exit_code = 255,
         .direnv = true,
-    }, &.{
-        .{ .kind = .zig, .version = "0.17.0" },
-        .{ .kind = .rust, .version = "1.80.0" },
-        .{ .kind = .go, .version = "1.22.3" },
-        .{ .kind = .node, .version = "20.11.0" },
-        .{ .kind = .odin, .version = "dev-2024-01" },
+    };
+    const model = withLanguages(base, &.{
+        .{ .kind = .zig, .version = versions[0] },
+        .{ .kind = .rust, .version = versions[1] },
+        .{ .kind = .go, .version = versions[2] },
+        .{ .kind = .node, .version = versions[3] },
+        .{ .kind = .odin, .version = versions[4] },
     });
+
     const rendered = renderToString(&model);
     try std.testing.expect(rendered.len < plain_buffer_size);
+    // zsh needs every escape wrapped, and a single missing pair corrupts line
+    // editing, so the count must match exactly.
+    try std.testing.expectEqual(
+        std.mem.count(u8, rendered, "%{"),
+        std.mem.count(u8, rendered, "%}"),
+    );
 }

@@ -146,6 +146,25 @@ prompty version                                        print name and version
 | clock       | `CLOCK_REALTIME` + `/etc/localtime`                            | 1 read                  |
 | exit status | `$PROMTY_LAST_EXIT`: a `✘` when the last command failed, last of all | —                  |
 
+### Robustness
+
+This program runs on every command, so it is built to degrade rather than to
+fail:
+
+- **Nothing overflows.** A directory name longer than the whole prompt budget is
+  cut on a character boundary and marked with `…`; no input can write past a
+  buffer, and the release build is the one that ships.
+- **Names are data, never code.** Control bytes are replaced with `?` so a
+  newline in a file name cannot start a fake prompt line, and both integrations
+  turn off the second expansion pass (`promptvars` for bash, `prompt_subst` and
+  `prompt_bang` for zsh) that would otherwise run a directory called `$(...)`.
+- **The terminal is left as it was found.** The background query saves the
+  terminal state, turns echo and canonical input off, reads the whole reply so
+  no byte is left in the input queue, restores the state on every path, and
+  holds off `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT` while doing it.
+- **The one subprocess has a deadline.** A command that does not answer in two
+  seconds is killed and the prompt falls back to reading `.git/HEAD`.
+
 ### Path truncation
 
 Three kept components, `~` counting as one, and the repository as the anchor:
@@ -195,7 +214,9 @@ slow. So it is one subprocess, and it can be switched off.
 ## Development
 
 ```sh
-zig build test        # 179 unit and integration tests
+zig build             # 79 KiB static binary, ReleaseFast
+zig build -Dmode=safe # same code with the safety checks on, for auditing
+zig build test        # 193 unit and integration tests
 zig build coverage    # the same tests under kcov, gate at 100% of lines
 zig build bench       # measure a real render, fork included
 zig build run -- render --no-color

@@ -23,8 +23,10 @@ pub fn format(out: []u8, milliseconds: u64) []const u8 {
     return std.fmt.bufPrint(out, "{d}h{d}m", .{ seconds / 3_600, (seconds % 3_600) / 60 }) catch unreachable;
 }
 
-/// The longest form is `1h59m`; four bytes plus a guard byte.
-pub const max_length = 8;
+/// The longest form for any `u64` of milliseconds is `5124095576030431h0m`,
+/// twenty bytes. The production path caps at a day, but the formatter must not
+/// be able to overrun its buffer on a value it was handed.
+pub const max_length = 24;
 
 fn expectFormat(expected: []const u8, milliseconds: u64) !void {
     var buffer: [max_length]u8 = undefined;
@@ -47,6 +49,13 @@ test "whole seconds up to a minute" {
     try expectFormat("10s", 10_000);
     try expectFormat("42s", 42_500);
     try expectFormat("59s", 59_999);
+}
+
+test "even an absurd duration fits the buffer" {
+    var buffer: [max_length]u8 = undefined;
+    const formatted = format(&buffer, std.math.maxInt(u64));
+    try std.testing.expect(formatted.len <= max_length);
+    try std.testing.expect(std.mem.endsWith(u8, formatted, "m"));
 }
 
 test "minutes and hours" {

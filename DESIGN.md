@@ -70,9 +70,17 @@ claims checkable rather than aspirational.
   collapses into one port call and one function from bytes to counts, so the
   interesting half is tested without a repository.
 - **Bounded loops.** The git walk is capped at 64 levels and asserts its bound;
-  a directory scan is bounded by the kernel's `getdents64` buffer; path
-  shortening keeps at most eight display components; `~` occupies one of them
-  and, inside a repository, the label is anchored on the repository name.
+  a directory scan is bounded by the kernel's `getdents64` buffer and rejects a
+  zero-length record instead of spinning; path shortening keeps at most eight
+  display components; `~` occupies one of them and, inside a repository, the
+  label is anchored on the repository name.
+- **Nothing is written past a buffer.** Path shortening clips to the budget on a
+  character boundary and marks the cut, because the shipping build has the
+  safety checks off: an over-long name must be a shorter prompt, not a stack
+  corruption.
+- **Untrusted text is sanitised at the boundary.** Control bytes are replaced
+  when the text enters the store, and the shell integrations disable the second
+  expansion pass, so a name is never interpreted as code.
 - **One line, one write.** `prompt.render` returns a slice of one buffer, and
   the CLI hands it to one `write`.
 - **Degrade, never fail.** A missing zone file means UTC, a silent terminal

@@ -45,7 +45,9 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
         .color = options.color and colorAllowed(host),
         .path = "/",
     };
-    model.user = host.environ.get("USER") orelse host.environ.get("LOGNAME");
+    if (host.environ.get("USER") orelse host.environ.get("LOGNAME")) |user| {
+        model.user = store.dupePrintable(user);
+    }
     model.is_root = host.user_id == 0;
 
     var working_directory_buffer: [path_mod.max_display_bytes]u8 = undefined;
@@ -67,7 +69,7 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     }
 
     var display_buffer: [path_mod.max_display_bytes]u8 = undefined;
-    model.path = store.dupe(path_mod.display(&display_buffer, .{
+    model.path = store.dupePrintable(path_mod.display(&display_buffer, .{
         .cwd = working_directory,
         .home = host.environ.get("HOME") orelse "",
         .repository_root = if (repository) |found| found.root else null,
@@ -146,10 +148,10 @@ fn statusDisabled(host: ports.Host) bool {
 fn withStatus(base: prompt.Git, report: git_status_mod.Report, store: *store_mod.Store) prompt.Git {
     var git = base;
     if (report.branch) |branch| {
-        git.branch = store.dupe(branch);
+        git.branch = store.dupePrintable(branch);
         git.detached = false;
     } else if (report.detached) {
-        if (report.commit) |commit| git.branch = store.dupe(git_mod.short(commit));
+        if (report.commit) |commit| git.branch = store.dupePrintable(git_mod.short(commit));
         git.detached = true;
     }
     git.status = report.status;
@@ -157,10 +159,11 @@ fn withStatus(base: prompt.Git, report: git_status_mod.Report, store: *store_mod
 }
 
 fn readStatus(host: ports.Host) ?git_status_mod.Report {
-    // 64 KiB is far more than any prompt needs: a repository with tens of
-    // thousands of changes fills it, and the truncated read then fails cleanly
-    // rather than being parsed halfway.
-    var output: [64 * 1024]u8 = undefined;
+    // Enough for a few thousand changed files. Larger output cannot be parsed
+    // halfway, so the read fails cleanly and the prompt falls back to the
+    // branch, which is what a repository with fifteen thousand open changes
+    // deserves anyway.
+    var output: [256 * 1024]u8 = undefined;
     const argv = [_][:0]const u8{
         "git",
         "--no-optional-locks",
@@ -248,8 +251,8 @@ fn probeRepository(
         if (locate(host, directory, git_dir_buffer, &head_buffer)) |located| {
             const operation = operationIn(host, located.git_dir);
             const branch = switch (located.head) {
-                .named => |name| store.dupe(name),
-                .detached => |commit| store.dupe(git_mod.short(commit)),
+                .named => |name| store.dupePrintable(name),
+                .detached => |commit| store.dupePrintable(git_mod.short(commit)),
             };
             return .{
                 .root = located.root,
@@ -363,34 +366,34 @@ fn versionFor(
     switch (kind) {
         .zig => {
             if (fromPlainFile(host, working_directory, ".zigversion", &path_buffer, &contents)) |version| {
-                return store.dupe(version);
+                return store.dupePrintable(version);
             }
             if (read(host, working_directory, "build.zig.zon", &path_buffer, &contents)) |zon| {
-                if (language_mod.zigVersionFromZon(zon)) |version| return store.dupe(version);
+                if (language_mod.zigVersionFromZon(zon)) |version| return store.dupePrintable(version);
             }
             return null;
         },
         .rust => {
             if (read(host, working_directory, "rust-toolchain.toml", &path_buffer, &contents)) |toml| {
-                if (language_mod.rustVersionFromToolchain(toml)) |version| return store.dupe(version);
+                if (language_mod.rustVersionFromToolchain(toml)) |version| return store.dupePrintable(version);
             }
             if (fromPlainFile(host, working_directory, "rust-toolchain", &path_buffer, &contents)) |version| {
-                return store.dupe(version);
+                return store.dupePrintable(version);
             }
             return null;
         },
         .go => {
             if (read(host, working_directory, "go.mod", &path_buffer, &contents)) |mod| {
-                if (language_mod.goVersionFromMod(mod)) |version| return store.dupe(version);
+                if (language_mod.goVersionFromMod(mod)) |version| return store.dupePrintable(version);
             }
             return null;
         },
         .node => {
             if (fromPlainFile(host, working_directory, ".nvmrc", &path_buffer, &contents)) |version| {
-                return store.dupe(version);
+                return store.dupePrintable(version);
             }
             if (fromPlainFile(host, working_directory, ".node-version", &path_buffer, &contents)) |version| {
-                return store.dupe(version);
+                return store.dupePrintable(version);
             }
             return null;
         },

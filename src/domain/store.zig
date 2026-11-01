@@ -19,6 +19,17 @@ pub const Store = struct {
         self.used = 0;
     }
 
+    /// Copies text that is going to be displayed, replacing control bytes: a
+    /// newline in a directory name or a branch must not be able to start what
+    /// looks like a new prompt line.
+    pub fn dupePrintable(self: *Store, text: []const u8) []const u8 {
+        const slice = self.claim(text.len);
+        for (text, 0..) |byte, index| {
+            slice[index] = if (byte < 0x20 or byte == 0x7f) '?' else byte;
+        }
+        return slice;
+    }
+
     pub fn dupe(self: *Store, text: []const u8) []const u8 {
         const slice = self.claim(text.len);
         @memcpy(slice, text);
@@ -44,6 +55,15 @@ test "dupe copies by value" {
 
     try std.testing.expectEqualStrings("hi", copy);
     try std.testing.expect(copy.ptr != &original);
+}
+
+test "control bytes become visible question marks" {
+    var store: Store = undefined;
+    store.reset();
+    const printable = store.dupePrintable("a\nb\tc\x7f");
+    try std.testing.expectEqualStrings("a?b?c?", printable);
+    // Ordinary text is untouched, including multi-byte characters.
+    try std.testing.expectEqualStrings("ñandú/日本語", store.dupePrintable("ñandú/日本語"));
 }
 
 test "claim hands out distinct, adjacent slices" {

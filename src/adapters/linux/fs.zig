@@ -94,7 +94,9 @@ pub const Fs = struct {
             var offset: usize = 0;
             while (offset < filled) {
                 const record: *const linux.dirent64 = @ptrCast(@alignCast(&buffer[offset]));
-                std.debug.assert(record.reclen > 0);
+                // A zero-length record would spin forever, and the release
+                // build is the one that ships: check it, do not assert it.
+                if (record.reclen == 0 or offset + record.reclen > filled) return false;
                 const name = entryName(buffer[offset..filled]);
                 if (name) |valid| {
                     visitor(context, .{

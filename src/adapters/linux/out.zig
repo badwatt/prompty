@@ -33,3 +33,22 @@ pub const Out = struct {
         }
     }
 };
+
+test "a descriptor that cannot be written to is dropped, not retried" {
+    // A closed descriptor is the cheapest way to be told "no": a prompt has
+    // nobody left to complain to, so it stops writing.
+    const device = std.posix.openat(linux.AT.FDCWD, "/dev/null", .{
+        .ACCMODE = .WRONLY,
+        .CLOEXEC = true,
+    }, 0) catch unreachable;
+    _ = linux.close(device);
+
+    const out = Out{ .fd = device };
+    out.output().write("hello");
+}
+
+test "stdout and stderr carry the right descriptors" {
+    try std.testing.expectEqual(posix.STDOUT_FILENO, Out.stdout.fd);
+    try std.testing.expectEqual(posix.STDERR_FILENO, Out.stderr.fd);
+    Out.stdout.output().write(""); // an empty write is a no-op
+}

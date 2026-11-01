@@ -12,13 +12,19 @@ pub fn build(b: *std.Build) void {
     // ReleaseFast with debug information stripped: 71 KiB instead of 12 MiB,
     // and 0.7 ms instead of 1.2 ms per prompt. Ask for `-Ddebug` when you want
     // to attach a debugger.
-    const debug_build = b.option(bool, "debug", "Build unoptimised with debug info") orelse false;
-    const optimize: std.builtin.OptimizeMode = if (debug_build) .debug else .fast;
+    // An explicit switch rather than `standardOptimizeOption`: `zig build` must
+    // produce the fast binary by default, and `-Dmode=safe` must really produce
+    // one with the runtime safety checks on, which is what audits need.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "mode",
+        "Optimisation and safety mode: debug, safe, fast (default) or small",
+    ) orelse .fast;
     const strip = b.option(
         bool,
         "strip",
         "Omit debug information from the installed binary",
-    ) orelse !debug_build;
+    ) orelse (optimize != .debug);
 
     const options = b.addOptions();
     options.addOption([]const u8, "name", application_name);
