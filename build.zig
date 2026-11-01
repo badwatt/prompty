@@ -44,6 +44,22 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // `zig build fmt` writes, `zig build fmt:check` only reports: the second is
+    // what CI runs.
+    const source_paths = [_]std.Build.LazyPath{
+        b.path("build.zig"),
+        b.path("build.zig.zon"),
+        b.path("src"),
+        b.path("tools"),
+    };
+    const fmt_step = b.step("fmt", "Format the sources");
+    const fmt = b.addFmt(.{ .paths = &source_paths });
+    fmt_step.dependOn(&fmt.step);
+
+    const fmt_check_step = b.step("fmt:check", "Fail if a source is not formatted");
+    const fmt_check = b.addFmt(.{ .paths = &source_paths, .check = true });
+    fmt_check_step.dependOn(&fmt_check.step);
+
     const run_step = b.step("run", "Run prompty");
     const run_command = b.addRunArtifact(exe);
     run_command.step.dependOn(b.getInstallStep());

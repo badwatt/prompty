@@ -1,0 +1,33 @@
+name: update flake lock
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 0" # weekly
+
+jobs:
+  update-flake:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6
+        with:
+          # update-flake-lock (via create-pull-request) installs its own
+          # Authorization header. Keeping the one persisted by checkout as well
+          # makes git send two, and GitHub answers 400 ("Duplicate header").
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v28
+
+      - name: Update flake.lock
+        uses: DeterminateSystems/update-flake-lock@v24
+        with:
+          commit-msg: "chore(deps): bump flake.lock"
+          pr-title: "chore(deps): bump flake.lock"
+          pr-labels: |
+            dependencies
+            github_actions
