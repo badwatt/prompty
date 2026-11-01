@@ -117,7 +117,11 @@ answer onto the screen and buffers it until a newline that never comes, so the
 reply shows up as garbage and, worse, stays in the input queue where the shell
 reads it as typed input. The detector therefore saves the terminal state, turns
 off echo and canonical input, reads until the reply's terminator so that no byte
-is left behind, and restores the state on every path out. The tests use a real
+is left behind, and restores the state on every path out. It also blocks the
+signals a user reaches for when a shell start looks stuck: a `SIGINT` delivered
+between those two `tcsetattr` calls would kill the process with the terminal
+half-changed, and the shell started afterwards would have no echo, no canonical
+input and a `CR` that no longer turns into a newline. The tests use a real
 pseudo-terminal for this, because the part that can go wrong is exactly the
 terminal state, and a pipe has none.
 

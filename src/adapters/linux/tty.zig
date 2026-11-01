@@ -59,6 +59,14 @@ pub const Tty = struct {
         }, 0) catch return null;
         defer _ = linux.close(device);
 
+        // A signal that arrives between changing the terminal state and
+        // restoring it would leave the terminal damaged: echo and canonical
+        // input off, carriage returns no longer translated. Block the signals
+        // that would kill the process for the length of the query, and let any
+        // pending one be delivered once the terminal is whole again.
+        const guard = SignalGuard.install();
+        defer guard.release();
+
         // Without a terminal there is nothing to ask, and pretending otherwise
         // would write a query into whatever the descriptor happens to be.
         const quiet = enterQuietMode(device) orelse return null;
@@ -70,6 +78,25 @@ pub const Tty = struct {
 
         return readReply(device, buffer);
     }
+
+    /// The signals a user reaches for when a shell start seems stuck.
+    const terminating_signals = [_]posix.SIG{ .INT, .QUIT, .TERM, .HUP };
+
+    const SignalGuard = struct {
+        saved: posix.sigset_t,
+
+        fn install() SignalGuard {
+            var blocked = posix.sigemptyset();
+            for (terminating_signals) |signal| posix.sigaddset(&blocked, signal);
+            var saved: posix.sigset_t = undefined;
+            posix.sigprocmask(posix.SIG.BLOCK, &blocked, &saved);
+            return .{ .saved = saved };
+        }
+
+        fn release(self: SignalGuard) void {
+            posix.sigprocmask(posix.SIG.SETMASK, &self.saved, null);
+        }
+    };
 
     const Quiet = struct { saved: posix.termios };
 
@@ -264,6 +291,23 @@ test "a descriptor that is not a terminal is refused" {
     var buffer: [Tty.reply_capacity]u8 = undefined;
     try std.testing.expect(Tty.enterQuietMode(pipe[0]) == null);
     try std.testing.expectEqual(@as(?[]const u8, null), Tty.readReply(pipe[0], &buffer));
+}
+
+test "terminating signals are held only while the terminal is changed" {
+    const guard = Tty.SignalGuard.install();
+    var current: posix.sigset_t = undefined;
+    posix.sigprocmask(posix.SIG.BLOCK, null, &current);
+    for (Tty.terminating_signals) |signal| {
+        try std.testing.expect(posix.sigismember(&current, signal));
+    }
+    // A signal that is not fatal for this window is left alone.
+    try std.testing.expect(!posix.sigismember(&current, .USR1));
+
+    guard.release();
+    posix.sigprocmask(posix.SIG.BLOCK, null, &current);
+    for (Tty.terminating_signals) |signal| {
+        try std.testing.expect(!posix.sigismember(&current, signal));
+    }
 }
 
 test "the reply terminator decides completeness" {
