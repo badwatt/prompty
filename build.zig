@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) void {
     const smoke = b.addSystemCommand(&.{
         "sh",
         "-c",
-        "for arguments in version help theme 'init zsh' 'init bash' 'render --no-color' 'render --shell=zsh' 'render --shell=bash' 'theme detect'; do " ++
+        "for arguments in version help theme 'init zsh' 'init bash' 'render --no-color' 'render --shell=zsh' 'render --shell=bash' 'render -d' 'render --duration' 'render --git=false' 'render -g=false' 'render --color=false' 'theme detect'; do " ++
             "\"$0\" $arguments > /dev/null 2>&1 || { echo \"failed: $arguments\"; exit 1; }; done",
     });
     smoke.addFileArg(exe.getEmittedBin());
