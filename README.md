@@ -64,7 +64,7 @@ programs.prompty = {
 };
 ```
 
-## Install without Nix
+## Install on Linux
 
 ```sh
 zig build
