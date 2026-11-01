@@ -114,3 +114,27 @@ test "a bare value with a semicolon keeps only what follows it" {
         parseBackground("11;rgb:1010/2020/3030").?,
     );
 }
+
+test "property: any reply is a colour or nothing" {
+    var prng = std.Random.DefaultPrng.init(0x05c);
+    const random = prng.random();
+    var buffer: [64]u8 = undefined;
+    const pieces = [_][]const u8{ "\x1b]11;", "rgb:", "#", "1e", "ff", "/", "\x07", "\x1b\\", "zz", "00" };
+
+    for (0..3000) |_| {
+        var length: usize = 0;
+        const count = random.intRangeAtMost(usize, 0, 8);
+        for (0..count) |_| {
+            const piece = pieces[random.uintLessThan(usize, pieces.len)];
+            if (length + piece.len > buffer.len) break;
+            @memcpy(buffer[length..][0..piece.len], piece);
+            length += piece.len;
+        }
+        if (parseBackground(buffer[0..length])) |color| {
+            // A parsed colour is a colour: three channels, nothing else.
+            try std.testing.expect(color.r <= 0xff);
+            try std.testing.expect(color.g <= 0xff);
+            try std.testing.expect(color.b <= 0xff);
+        }
+    }
+}

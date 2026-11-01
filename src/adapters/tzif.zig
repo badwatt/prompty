@@ -432,3 +432,26 @@ test "a version 2 file whose second header is missing is rejected" {
     fixture.data(block, 4);
     try std.testing.expectEqual(@as(?i32, null), offsetAt(fixture.buffer[0..fixture.length], 0));
 }
+
+test "property: any bytes either answer or say nothing" {
+    // A zone file is data from disk: one bit flips, and the answer is null
+    // rather than a wrong clock or a read past the buffer.
+    var prng = std.Random.DefaultPrng.init(0x721f);
+    const random = prng.random();
+    var buffer: [512]u8 = undefined;
+
+    for (0..3000) |_| {
+        const length = random.intRangeAtMost(usize, 0, buffer.len);
+        for (buffer[0..length]) |*byte| byte.* = random.int(u8);
+        // Half the time it looks like a zone, so the parser gets past the magic
+        // and into the counts and blocks.
+        if (length >= 44 and random.boolean()) {
+            @memcpy(buffer[0..4], magic);
+            buffer[4] = if (random.boolean()) '2' else 0;
+        }
+        if (offsetAt(buffer[0..length], random.int(i64))) |offset| {
+            // A UTC offset is a day or so, never anything a clock can show.
+            try std.testing.expect(offset > -86_400 and offset < 86_400);
+        }
+    }
+}

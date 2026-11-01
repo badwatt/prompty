@@ -189,3 +189,23 @@ test "text at the very end of the buffer is quoted correctly" {
     canvas.text("%%%%%");
     try std.testing.expectEqualStrings("%%%%%%%%%%", canvas.bytes());
 }
+
+test "property: no text, quoted or not, escapes the buffer" {
+    var prng = std.Random.DefaultPrng.init(0xca77a5);
+    const random = prng.random();
+    const pieces = [_][]const u8{ "abc", "%", "\\", "\x1b[1m", "ñ", "🚀", "50%" };
+
+    inline for (.{ Shell.plain, Shell.zsh, Shell.bash }) |shell| {
+        for (0..800) |_| {
+            var buffer: [64]u8 = undefined;
+            var canvas = Canvas.init(&buffer, shell, true);
+            const count = random.intRangeAtMost(usize, 0, 20);
+            for (0..count) |_| {
+                const piece = pieces[random.uintLessThan(usize, pieces.len)];
+                if (random.boolean()) canvas.text(piece) else canvas.escape(piece);
+                try std.testing.expect(canvas.bytes().len <= buffer.len);
+            }
+            try std.testing.expect(canvas.len <= buffer.len);
+        }
+    }
+}

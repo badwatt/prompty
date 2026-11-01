@@ -139,3 +139,32 @@ test "a display name is cut short on a character boundary" {
     try std.testing.expectEqualStrings("ñandú", store.dupeDisplay("ñandú", 64));
     try std.testing.expectEqualStrings("a?b", store.dupeDisplay("a\nb", 64));
 }
+
+test "property: a display name is always bounded and stays valid" {
+    var prng = std.Random.DefaultPrng.init(0x5702e);
+    const random = prng.random();
+    var store: Store = undefined;
+    var buffer: [256]u8 = undefined;
+    const pieces = [_][]const u8{ "a", "ñ", "日", "\n", "\x7f", "Z" };
+
+    for (0..2000) |_| {
+        store.reset();
+        var length: usize = 0;
+        const count = random.intRangeAtMost(usize, 0, 30);
+        for (0..count) |_| {
+            const piece = pieces[random.uintLessThan(usize, pieces.len)];
+            if (length + piece.len > buffer.len) break;
+            @memcpy(buffer[length..][0..piece.len], piece);
+            length += piece.len;
+        }
+        const limit = random.intRangeAtMost(usize, 0, buffer.len);
+        const shown = store.dupeDisplay(buffer[0..length], limit);
+        try std.testing.expect(shown.len <= limit);
+        // Control bytes never reach the terminal...
+        for (shown) |byte| try std.testing.expect(byte >= 0x20 and byte != 0x7f);
+        // ...and a well-formed name stays well formed when it is cut.
+        if (std.unicode.utf8ValidateSlice(buffer[0..length])) {
+            try std.testing.expect(std.unicode.utf8ValidateSlice(shown));
+        }
+    }
+}

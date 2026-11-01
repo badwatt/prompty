@@ -400,3 +400,62 @@ test "a label that fills the budget exactly is not marked as cut" {
     try std.testing.expectEqual(@as(usize, max_display_bytes), label.len);
     try std.testing.expect(!std.mem.endsWith(u8, label, ellipsis));
 }
+
+/// Fills `buffer` with random bytes drawn from `alphabet`.
+fn randomSlice(random: std.Random, buffer: []u8, alphabet: []const u8) []const u8 {
+    const length = random.intRangeAtMost(usize, 0, buffer.len);
+    for (buffer[0..length]) |*byte| {
+        byte.* = alphabet[random.uintLessThan(usize, alphabet.len)];
+    }
+    return buffer[0..length];
+}
+
+test "property: any bytes produce a bounded, non-empty label" {
+    // The path comes from the environment, so the property is about *any* byte
+    // sequence: the label must stay inside its budget and never be empty.
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const random = prng.random();
+    var cwd_buffer: [1024]u8 = undefined;
+    var home_buffer: [128]u8 = undefined;
+    var root_buffer: [128]u8 = undefined;
+    var out: [max_display_bytes]u8 = undefined;
+
+    for (0..3000) |_| {
+        const cwd = randomSlice(random, &cwd_buffer, "/abZ09\t\x00\xff.\xf1-");
+        const home = randomSlice(random, &home_buffer, "/abZ0.");
+        const root = randomSlice(random, &root_buffer, "/abZ0.");
+        const label = display(&out, .{
+            .cwd = cwd,
+            .home = home,
+            .repository_root = root,
+            .keep = random.intRangeAtMost(u8, 1, max_keep),
+        });
+        try std.testing.expect(label.len > 0);
+        try std.testing.expect(label.len <= max_display_bytes);
+        try std.testing.expect(label.ptr == &out or label.len == 1);
+    }
+}
+
+test "property: valid UTF-8 in, valid UTF-8 out" {
+    // Component names are bytes the filesystem accepts; when they are well
+    // formed the label has to be as well, however it gets cut.
+    var prng = std.Random.DefaultPrng.init(0xc0ffee);
+    const random = prng.random();
+    const pieces = [_][]const u8{ "a", "ñ", "日", "🚀", "Z", "9", ".", "-" };
+    var cwd_buffer: [512]u8 = undefined;
+    var out: [max_display_bytes]u8 = undefined;
+
+    for (0..1500) |_| {
+        var length: usize = 0;
+        const count = random.intRangeAtMost(usize, 1, 40);
+        for (0..count) |_| {
+            const piece = pieces[random.uintLessThan(usize, pieces.len)];
+            if (length + piece.len > cwd_buffer.len) break;
+            @memcpy(cwd_buffer[length..][0..piece.len], piece);
+            length += piece.len;
+        }
+        const label = display(&out, .{ .cwd = cwd_buffer[0..length], .home = "/home/dev" });
+        try std.testing.expect(std.unicode.utf8ValidateSlice(label));
+        try std.testing.expect(label.len > 0);
+    }
+}

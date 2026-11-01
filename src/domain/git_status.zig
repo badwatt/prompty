@@ -288,3 +288,35 @@ test "counts saturate instead of wrapping" {
     const status = parse(records[0..written]).?.status;
     try std.testing.expectEqual(@as(u16, 64), status.untracked);
 }
+
+test "property: any bytes are parsed, never indexed past" {
+    // The records come from another program. Whatever it prints, the parser
+    // reports something bounded or nothing at all.
+    var prng = std.Random.DefaultPrng.init(0xbadc0de);
+    const random = prng.random();
+    var buffer: [512]u8 = undefined;
+    const pieces = [_][]const u8{
+        "# branch.head ", "main", "\x00", "1 M. N... ", "2 R. ", "? f", "u UU ",
+        "# branch.ab +1 -2", "# branch.oid ", "(detached)", "\x00\x00", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "# branch.head (detached)", "\xff\xfe",
+    };
+
+    for (0..4000) |_| {
+        var length: usize = 0;
+        const count = random.intRangeAtMost(usize, 0, 12);
+        for (0..count) |_| {
+            const piece = pieces[random.uintLessThan(usize, pieces.len)];
+            if (length + piece.len > buffer.len) break;
+            @memcpy(buffer[length..][0..piece.len], piece);
+            length += piece.len;
+        }
+        const records = buffer[0..length];
+        if (parse(records)) |report| {
+            if (report.branch) |branch| {
+                try std.testing.expect(branch.len > 0);
+                try std.testing.expect(branch.len <= max_branch_bytes);
+            }
+            if (report.commit) |commit| try std.testing.expect(commit.len >= 7);
+        }
+    }
+}
