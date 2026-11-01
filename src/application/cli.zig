@@ -507,6 +507,34 @@ test "a silent terminal is reported without failing the shell" {
     try std.testing.expectEqual(@as(usize, 0), harness.host.files.write_count);
 }
 
+test "a hostile name cannot forge the separator the shell splits on" {
+    // The zsh integration splits the line on 0x1f to get PROMPT and RPROMPT. A
+    // branch or a directory that contains that byte would split the prompt in
+    // the wrong place, so it is replaced before the renderer sees it.
+    const sources = [_]fakes.FakeFiles.File{
+        .{ .path = "/srv/evil\x1fdir/.git/HEAD", .contents = "ref: refs/heads/main\x1fnot-really\n" },
+    };
+    const environment = [_][2][]const u8{
+        .{ "USER", "dev\x1froot" },
+        .{ "HOME", "/home/dev" },
+        .{ "PWD", "/srv/evil\x1fdir" },
+        .{ "PROMTY_LAST_DURATION_MS", "1234" },
+    };
+    var harness = CliHarness.init(&sources, &environment);
+    try std.testing.expectEqual(
+        exit_ok,
+        harness.dispatch(&.{ "prompty", "render", "--shell=zsh", "--duration" }),
+    );
+
+    const rendered = harness.host.stdout();
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{prompt.split}));
+    // And the right-hand side is only ever the number.
+    const right = rendered[std.mem.indexOfScalar(u8, rendered, prompt.split).? + 1 ..];
+    try std.testing.expect(std.mem.startsWith(u8, right, "%{\x1b[38;2;"));
+    try std.testing.expect(std.mem.indexOf(u8, right, "1234ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, right, "evil") == null);
+}
+
 test "an unknown argument is a usage error on stderr" {
     var harness = CliHarness.init(&.{}, &base_environment);
     try std.testing.expectEqual(exit_usage, harness.dispatch(&.{ "prompty", "wat" }));

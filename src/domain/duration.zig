@@ -23,6 +23,12 @@ pub fn format(out: []u8, milliseconds: u64) []const u8 {
     return std.fmt.bufPrint(out, "{d}h{d}m", .{ seconds / 3_600, (seconds % 3_600) / 60 }) catch unreachable;
 }
 
+/// The right-edge form: the number and its unit, nothing else. It exists so the
+/// prompt does not format numbers itself.
+pub fn millis(out: []u8, milliseconds: u64) []const u8 {
+    return std.fmt.bufPrint(out, "{d}ms", .{milliseconds}) catch unreachable;
+}
+
 /// The longest form for any `u64` of milliseconds is `5124095576030431h0m`,
 /// twenty bytes. The production path caps at a day, but the formatter must not
 /// be able to overrun its buffer on a value it was handed.
@@ -64,4 +70,13 @@ test "minutes and hours" {
     try expectFormat("59m59s", 3_599_000);
     try expectFormat("1h0m", 3_600_000);
     try expectFormat("2h5m", 7_500_000);
+}
+
+test "the right-edge form is the number in milliseconds" {
+    var buffer: [max_length]u8 = undefined;
+    try std.testing.expectEqualStrings("0ms", millis(&buffer, 0));
+    try std.testing.expectEqualStrings("1234ms", millis(&buffer, 1_234));
+    try std.testing.expectEqualStrings("86400000ms", millis(&buffer, 86_400_000));
+    // Even the largest value a u64 can hold fits the buffer the prompt uses.
+    try std.testing.expect(std.mem.endsWith(u8, millis(&buffer, std.math.maxInt(u64)), "ms"));
 }

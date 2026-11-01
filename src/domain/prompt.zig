@@ -187,7 +187,7 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         canvas.text(&[_]u8{split});
         if (model.duration_ms) |milliseconds| {
             var digits: [duration_mod.max_length]u8 = undefined;
-            const label = std.fmt.bufPrint(&digits, "{d}ms", .{milliseconds}) catch unreachable;
+            const label = duration_mod.millis(&digits, milliseconds);
             paint(&canvas, model.theme.yellow, null);
             canvas.escape(bold_on);
             canvas.text(label);

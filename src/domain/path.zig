@@ -25,6 +25,11 @@ pub const max_display_bytes = 512;
 /// buffer below.
 pub const max_keep: u8 = 8;
 
+/// Scratch space for a path plus a suffix (`.git/HEAD`, a gitfile target): two
+/// labels' worth, because the label is what gets shown and the rest is what gets
+/// opened.
+pub const scratch_bytes = max_display_bytes * 2;
+
 pub const truncation_symbol = "…/";
 
 pub const Input = struct {

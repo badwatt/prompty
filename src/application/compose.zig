@@ -18,6 +18,7 @@ const prompt = @import("../domain/prompt.zig");
 const store_mod = @import("../domain/store.zig");
 const theme_mod = @import("../domain/theme.zig");
 const ports = @import("../ports/host.zig");
+const repository = @import("repository.zig");
 
 pub const Options = struct {
     shell: canvas.Shell = .plain,
@@ -30,11 +31,6 @@ pub const Options = struct {
     /// instead of dimmed after the pill.
     duration: bool = false,
 };
-
-/// The most directory levels prompty will walk looking for a repository. A
-/// repository nested deeper than this is not a repository anyone wants to see
-/// in a prompt.
-pub const max_git_walk: u8 = 64;
 
 pub const max_duration_ms: u64 = 24 * 60 * 60 * 1000;
 
@@ -58,9 +54,9 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     // The repository is looked up before the path is formatted: inside one, the
     // label is anchored on its name rather than on home. Both the root and the
     // git directory borrow this buffer, so it lives here, in the caller.
-    var git_dir_buffer: [path_mod.max_display_bytes * 2]u8 = undefined;
-    const repository = probeRepository(host, working_directory, store, &git_dir_buffer);
-    if (repository) |found| {
+    var git_dir_buffer: [path_mod.scratch_bytes]u8 = undefined;
+    const found_repository = repository.probe(host, working_directory, store, &git_dir_buffer);
+    if (found_repository) |found| {
         model.git = found.git;
         const mode = statusMode(host, options.git);
         if (mode != .off) {
@@ -68,14 +64,14 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
                 model.git = withStatus(found.git, report, store);
             }
         }
-        if (hasStash(host, found.git_dir)) model.git.?.status.stashed = 1;
+        if (repository.hasStash(host, found.git_dir)) model.git.?.status.stashed = 1;
     }
 
     var display_buffer: [path_mod.max_display_bytes]u8 = undefined;
     model.path = store.dupePrintable(path_mod.display(&display_buffer, .{
         .cwd = working_directory,
         .home = host.environ.get("HOME") orelse "",
-        .repository_root = if (repository) |found| found.root else null,
+        .repository_root = if (found_repository) |found| found.root else null,
         .keep = options.keep_components,
     }));
 
@@ -212,13 +208,6 @@ fn readStatus(host: ports.Host, mode: StatusMode) ?git_status_mod.Report {
     return git_status_mod.parse(records);
 }
 
-fn hasStash(host: ports.Host, git_dir: []const u8) bool {
-    var scratch: [path_mod.max_display_bytes * 2]u8 = undefined;
-    if (existsIn(host, git_dir, "refs/stash", &scratch)) return true;
-    // A packed or reflog-only stash still counts.
-    return existsIn(host, git_dir, "logs/refs/stash", &scratch);
-}
-
 fn colorAllowed(host: ports.Host) bool {
     if (host.environ.get("NO_COLOR") != null) return false;
     if (host.environ.get("TERM")) |term| {
@@ -252,151 +241,6 @@ fn parseExitCode(host: ports.Host) ?u8 {
 fn direnvActive(host: ports.Host) bool {
     const diff = host.environ.get("DIRENV_DIFF") orelse return false;
     return diff.len > 0;
-}
-
-const Located = struct {
-    /// The worktree root: the directory that holds the `.git` entry.
-    root: []const u8,
-    git_dir: []const u8,
-    head: git_mod.Head,
-};
-
-const Probe = struct {
-    root: []const u8,
-    git_dir: []const u8,
-    git: prompt.Git,
-};
-
-fn probeRepository(
-    host: ports.Host,
-    working_directory: []const u8,
-    store: *store_mod.Store,
-    git_dir_buffer: []u8,
-) ?Probe {
-    std.debug.assert(git_dir_buffer.len >= path_mod.max_display_bytes * 2);
-    var head_buffer: [git_mod.max_head_bytes]u8 = undefined;
-
-    var directory = working_directory;
-    var walked: u8 = 0;
-    while (true) {
-        // Every iteration either finds a repository or walks one level up, so
-        // the assertion is the loop's bound.
-        std.debug.assert(walked < max_git_walk);
-        walked += 1;
-        if (locate(host, directory, git_dir_buffer, &head_buffer)) |located| {
-            const operation = operationIn(host, located.git_dir);
-            const branch = switch (located.head) {
-                .named => |name| store.dupePrintable(name),
-                .detached => |commit| store.dupePrintable(git_mod.short(commit)),
-            };
-            return .{
-                .root = located.root,
-                .git_dir = located.git_dir,
-                .git = .{ .branch = branch, .operation = operation },
-            };
-        }
-        directory = parent(directory) orelse return null;
-    }
-}
-
-fn locate(
-    host: ports.Host,
-    directory: []const u8,
-    git_dir_buffer: []u8,
-    head_buffer: []u8,
-) ?Located {
-    var scratch: [path_mod.max_display_bytes * 2]u8 = undefined;
-
-    // The common case: a real `.git` directory with a HEAD inside.
-    if (join(&scratch, directory, ".git/HEAD")) |head_path| {
-        if (host.files.read(head_path, head_buffer)) |contents| {
-            const head = git_mod.parseHead(contents) orelse return null;
-            const git_dir_path = join(&scratch, directory, ".git") orelse return null;
-            const git_dir = copy(git_dir_buffer, git_dir_path) orelse return null;
-            return .{ .root = directory, .git_dir = git_dir, .head = head };
-        }
-    }
-
-    // A worktree or submodule: `.git` is a file pointing at the real directory.
-    const pointer_path = join(&scratch, directory, ".git") orelse return null;
-    const pointer = host.files.read(pointer_path, head_buffer) orelse return null;
-    const target = git_mod.parseGitFile(pointer) orelse return null;
-
-    var resolved_buffer: [path_mod.max_display_bytes * 2]u8 = undefined;
-    const resolved = if (target[0] == '/')
-        target
-    else
-        join(&resolved_buffer, directory, target) orelse return null;
-    const git_dir = copy(git_dir_buffer, resolved) orelse return null;
-
-    const head_path = join(&scratch, git_dir, "HEAD") orelse return null;
-    const contents = host.files.read(head_path, head_buffer) orelse return null;
-    const head = git_mod.parseHead(contents) orelse return null;
-    return .{ .root = directory, .git_dir = git_dir, .head = head };
-}
-
-fn operationIn(host: ports.Host, git_dir: []const u8) git_mod.Operation {
-    var scratch: [path_mod.max_display_bytes * 2]u8 = undefined;
-    if (existsIn(host, git_dir, "rebase-merge", &scratch) or
-        existsIn(host, git_dir, "rebase-apply", &scratch))
-    {
-        return .rebase;
-    }
-    if (existsIn(host, git_dir, "MERGE_HEAD", &scratch)) return .merge;
-    if (existsIn(host, git_dir, "CHERRY_PICK_HEAD", &scratch)) return .cherry_pick;
-    if (existsIn(host, git_dir, "BISECT_LOG", &scratch)) return .bisect;
-    return .none;
-}
-
-fn existsIn(host: ports.Host, git_dir: []const u8, name: []const u8, scratch: []u8) bool {
-    const path = join(scratch, git_dir, name) orelse return false;
-    return host.files.exists(path);
-}
-
-const join = path_mod.join;
-
-fn copy(buffer: []u8, content: []const u8) ?[]u8 {
-    if (content.len > buffer.len) return null;
-    @memcpy(buffer[0..content.len], content);
-    return buffer[0..content.len];
-}
-
-fn parent(directory: []const u8) ?[]const u8 {
-    var end = directory.len;
-    while (end > 0 and directory[end - 1] == '/') end -= 1;
-    if (end == 0) return null;
-    var index = end;
-    while (index > 0) : (index -= 1) {
-        if (directory[index - 1] == '/') break;
-    }
-    if (index == 0) return null;
-    if (index == 1) return "/";
-    return directory[0 .. index - 1];
-}
-
-test "join never produces double separators" {
-    var buffer: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("a/b", join(&buffer, "a", "b").?);
-    try std.testing.expectEqualStrings("a/b", join(&buffer, "a/", "b").?);
-    try std.testing.expectEqualStrings("/b", join(&buffer, "/", "b").?);
-    try std.testing.expectEqualStrings("b", join(&buffer, "", "b").?);
-    var small: [3]u8 = undefined;
-    try std.testing.expectEqual(@as(?[]u8, null), join(&small, "abc", "de"));
-}
-
-test "parent walks up to the root and stops" {
-    try std.testing.expectEqualStrings("/home/dev", parent("/home/dev/src").?);
-    try std.testing.expectEqualStrings("/home", parent("/home/dev").?);
-    try std.testing.expectEqualStrings("/", parent("/home").?);
-    try std.testing.expectEqual(@as(?[]const u8, null), parent("/"));
-    try std.testing.expectEqual(@as(?[]const u8, null), parent("relative"));
-    try std.testing.expectEqualStrings("/home", parent("/home/dev/").?);
-}
-
-test "copy refuses to overflow the destination" {
-    var buffer: [4]u8 = undefined;
-    try std.testing.expectEqualStrings("abc", copy(&buffer, "abc").?);
-    try std.testing.expectEqual(@as(?[]u8, null), copy(&buffer, "abcde"));
 }
 
 // ---------------------------------------------------------------------------
