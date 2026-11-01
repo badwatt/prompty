@@ -25,7 +25,7 @@ in
       description = "The prompty package to install.";
     };
 
-    gitStatus = lib.mkOption {
+    git = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = ''
@@ -35,7 +35,7 @@ in
       '';
     };
 
-    durationRight = lib.mkOption {
+    duration = lib.mkOption {
       type = lib.types.bool;
       default = false;
       description = ''
@@ -63,15 +63,15 @@ in
     # Ordered after the rest of the user's initialisation, and idempotent: the
     # generated script refuses to install itself twice.
     programs.zsh.initContent = lib.mkOrder 1200 ''
-      eval "$(${command} init zsh${lib.optionalString cfg.durationRight " --duration-right"})"
+      eval "$(${command} init zsh${lib.optionalString cfg.duration " --duration"})"
     '';
 
     programs.bash.initExtra = ''
-      eval "$(${command} init bash${lib.optionalString cfg.durationRight " --duration-right"})"
+      eval "$(${command} init bash${lib.optionalString cfg.duration " --duration"})"
     '';
 
     home.sessionVariables = lib.mkMerge [
-      (lib.mkIf (!cfg.gitStatus) { PROMTY_GIT_STATUS = "0"; })
+      (lib.mkIf (!cfg.git) { PROMTY_GIT = "0"; })
       (lib.mkIf (cfg.background != null) { PROMTY_BACKGROUND = cfg.background; })
     ];
   };

@@ -15,8 +15,10 @@ const shell_init = @import("shell_init.zig");
 pub const RenderOptions = struct {
     shell: canvas.Shell = .plain,
     color: bool = true,
-    git_status: bool = true,
-    duration_right: bool = false,
+    /// Ask git for the working tree status. On by default: `--git=false` turns
+    /// it off, and the branch still comes from `.git/HEAD`.
+    git: bool = true,
+    duration: bool = false,
 };
 
 pub const ThemeOptions = struct {
@@ -26,7 +28,7 @@ pub const ThemeOptions = struct {
 
 pub const InitOptions = struct {
     shell: canvas.Shell,
-    duration_right: bool = false,
+    duration: bool = false,
 };
 
 pub const Action = union(enum) {
@@ -57,6 +59,48 @@ pub fn parse(argv: []const []const u8) Action {
     return .{ .invalid = command };
 }
 
+/// What a boolean flag said.
+const Boolean = enum {
+    /// Not this flag: keep looking.
+    no,
+    on,
+    off,
+    /// This flag, with something other than true or false after it.
+    invalid,
+};
+
+/// A boolean flag, in every spelling it has: `-d`, `--duration`, `-d=false`,
+/// `--duration=false`, and the same with `true`.
+///
+/// A flag on its own means true, which is what a bare `-d` should obviously
+/// mean; the `=false` form exists because a flag that defaults to true (`--git`)
+/// needs a way to be turned off without a second, negative name.
+fn boolean(flag: []const u8, short: u8, long: []const u8) Boolean {
+    var name = flag;
+    var explicit: ?[]const u8 = null;
+    if (std.mem.indexOfScalar(u8, flag, '=')) |equals| {
+        name = flag[0..equals];
+        explicit = flag[equals + 1 ..];
+    }
+
+    const is_short = name.len == 2 and name[0] == '-' and name[1] == short;
+    if (!is_short and !std.mem.eql(u8, name, long)) return .no;
+
+    const value = explicit orelse return .on;
+    if (std.mem.eql(u8, value, "true")) return .on;
+    if (std.mem.eql(u8, value, "false")) return .off;
+    return .invalid;
+}
+
+/// Applies a boolean flag to `field`. True when the flag was this one.
+fn applyBoolean(field: *bool, flag: []const u8, short: u8, long: []const u8) ?bool {
+    const matched = boolean(flag, short, long);
+    if (matched == .no) return null;
+    if (matched == .invalid) return false;
+    field.* = matched == .on;
+    return true;
+}
+
 fn parseRender(flags: []const []const u8) Action {
     var options = RenderOptions{};
     for (flags) |flag| {
@@ -64,12 +108,16 @@ fn parseRender(flags: []const []const u8) Action {
             options.color = false;
             continue;
         }
-        if (std.mem.eql(u8, flag, "--no-git-status")) {
-            options.git_status = false;
+        if (applyBoolean(&options.git, flag, 'g', "--git")) |matched| {
+            if (!matched) return .{ .invalid = flag };
             continue;
         }
-        if (std.mem.eql(u8, flag, "--duration-right")) {
-            options.duration_right = true;
+        if (applyBoolean(&options.duration, flag, 'd', "--duration")) |matched| {
+            if (!matched) return .{ .invalid = flag };
+            continue;
+        }
+        if (applyBoolean(&options.color, flag, 'c', "--color")) |matched| {
+            if (!matched) return .{ .invalid = flag };
             continue;
         }
         const prefix = "--shell=";
@@ -103,8 +151,8 @@ fn parseInit(arguments: []const []const u8) Action {
     if (shell == .plain) return .{ .invalid = arguments[0] };
     var options = InitOptions{ .shell = shell };
     for (arguments[1..]) |flag| {
-        if (std.mem.eql(u8, flag, "--duration-right")) {
-            options.duration_right = true;
+        if (applyBoolean(&options.duration, flag, 'd', "--duration")) |matched| {
+            if (!matched) return .{ .invalid = flag };
             continue;
         }
         return .{ .invalid = flag };
@@ -119,14 +167,14 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
             const model = compose.build(host, store, .{
                 .shell = options.shell,
                 .color = options.color,
-                .git_status = options.git_status,
-                .duration_right = options.duration_right,
+                .git = options.git,
+                .duration = options.duration,
             });
             host.stdout.write(prompt.render(&model, &buffer));
             return exit_ok;
         },
         .init => |init| {
-            host.stdout.write(shell_init.script(init.shell, init.duration_right));
+            host.stdout.write(shell_init.script(init.shell, init.duration));
             return exit_ok;
         },
         .version => {
@@ -162,10 +210,12 @@ const usage =
     "usage: " ++ metadata.name ++ " <command>\n" ++
     "\n" ++
     "  render [--shell=zsh|bash|plain] [--no-color]   print the prompt\n" ++
-    "         [--no-git-status] [--duration-right]     skip git / right-align the time\n" ++
-    "  init zsh|bash [--duration-right]               print the shell integration\n" ++
+    "         [-g|--git] [-d|--duration]               git status / the time\n" ++
+    "  init zsh|bash [-d|--duration]                  print the shell integration\n" ++
     "  theme [detect [--force]]                       print (or redetect) the palette\n" ++
     "  version                                        print name and version\n" ++
+    "\n" ++
+    "A boolean flag on its own means true: --git=false turns one off.\n" ++
     "\n" ++
     "Set PROMTY_BACKGROUND=#rrggbb to match your terminal background,\n" ++
     "and NO_COLOR=1 to disable colours entirely.\n";
@@ -243,9 +293,22 @@ test "render takes an optional shell and colour switch" {
         &.{ "prompty", "render", "--shell=plain" },
     );
     try expectParse(
-        .{ .render = .{ .git_status = false } },
-        &.{ "prompty", "render", "--no-git-status" },
+        .{ .render = .{ .git = false } },
+        &.{ "prompty", "render", "--git=false" },
     );
+    try expectParse(.{ .render = .{} }, &.{ "prompty", "render", "--git" });
+    try expectParse(.{ .render = .{ .git = false } }, &.{ "prompty", "render", "-g=false" });
+    // Both at once, one of them with an explicit value.
+    try expectParse(
+        .{ .render = .{ .git = false, .duration = true } },
+        &.{ "prompty", "render", "-g=false", "--duration" },
+    );
+    // A boolean flag with something else after it is a usage error, not a
+    // guess: `--git=maybe` has no meaning.
+    try expectParse(.{ .invalid = "--git=maybe" }, &.{ "prompty", "render", "--git=maybe" });
+    try expectParse(.{ .invalid = "--duration=0" }, &.{ "prompty", "render", "--duration=0" });
+    try expectParse(.{ .invalid = "--no-git-status" }, &.{ "prompty", "render", "--no-git-status" });
+    try expectParse(.{ .render = .{ .color = false } }, &.{ "prompty", "render", "--color=false" });
 }
 
 test "render rejects unknown flags and shells" {
@@ -256,16 +319,24 @@ test "render rejects unknown flags and shells" {
 
 test "init takes the duration option after the shell" {
     try expectParse(
-        .{ .init = .{ .shell = .zsh, .duration_right = true } },
-        &.{ "prompty", "init", "zsh", "--duration-right" },
+        .{ .init = .{ .shell = .zsh, .duration = true } },
+        &.{ "prompty", "init", "zsh", "--duration" },
     );
     try expectParse(.{ .invalid = "--wat" }, &.{ "prompty", "init", "zsh", "--wat" });
 }
 
-test "render takes the right-aligned duration" {
+test "render takes the duration under both spellings" {
     try expectParse(
-        .{ .render = .{ .duration_right = true } },
-        &.{ "prompty", "render", "--duration-right" },
+        .{ .render = .{ .duration = true } },
+        &.{ "prompty", "render", "--duration" },
+    );
+    try expectParse(
+        .{ .render = .{ .duration = true } },
+        &.{ "prompty", "render", "-d" },
+    );
+    try expectParse(
+        .{ .init = .{ .shell = .bash, .duration = true } },
+        &.{ "prompty", "init", "bash", "-d" },
     );
 }
 

@@ -14,15 +14,15 @@ background, then dim detail, then the chevron. Zero configuration.
 Every number is a full `fork` + `exec` + render, 100-1000 runs, same machine,
 same directory, default configuration of each prompt:
 
-| where | prompty | starship 1.25.1 |
-| --- | --- | --- |
-| empty directory | **0.92 ms** | 3.08 ms |
-| this repository, `git status` on | **4.3 ms** | 13.73 ms |
-| this repository, `--no-git-status` | **0.95 ms** | — |
-| a directory with 20,000 entries | **0.92 ms** | 87.6 ms |
-| binary size | **68 KiB** | 13.4 MiB |
+| where                            | prompty     | starship 1.25.1 |
+| -------------------------------- | ----------- | --------------- |
+| empty directory                  | **0.92 ms** | 3.08 ms         |
+| this repository, `git status` on | **4.3 ms**  | 13.73 ms        |
+| this repository, `--git=false`   | **0.95 ms** | —               |
+| a directory with 20,000 entries  | **0.92 ms** | 87.6 ms         |
+| binary size                      | **68 KiB**  | 13.4 MiB        |
 
-The difference is what each prompt *looks at*. prompty reads `.git/HEAD`, runs
+The difference is what each prompt _looks at_. prompty reads `.git/HEAD`, runs
 one `git status` when you are in a repository, and reads the clock. It never
 lists a directory and never asks a program for its version. Outside a
 repository a render is 22 syscalls, whether the directory holds nothing or
@@ -59,8 +59,8 @@ and idempotent if sourced twice. No shell file to edit.
 ```nix
 programs.prompty = {
   enable = true;
-  gitStatus = true;         # false: skip the git call, keep the branch
-  durationRight = false;    # true: last command's time, right edge, bold ms
+  duration = false;         # true: the last command's time, right edge
+  git = true;               # false: skip the git call, keep the branch
   background = "#1e1e2e";   # else prompty asks the terminal once and caches it
 };
 ```
@@ -85,12 +85,17 @@ microseconds. A Nerd Font is needed for the glyphs.
 
 ```
 prompty render [--shell=zsh|bash|plain] [--no-color]   print the prompt
-               [--no-git-status]                       skip the git call
-               [--duration-right]                      time at the right edge
-prompty init zsh|bash [--duration-right]               print the shell integration
+               [-g|--git] [-d|--duration]              git status, and the time
+                                                       at the right edge
+prompty init zsh|bash [-d|--duration]                  print the shell integration
 prompty theme [detect [--force]]                       print (or redetect) the palette
 prompty version                                        print name and version
 ```
+
+A boolean flag on its own means true, so `-d`, `--duration` and `--duration=true`
+are the same thing, and `--git=false` (or `-g=false`) is how the flag that
+defaults to true is turned off. The value has to come after an `=`: anything
+else there is a usage error rather than a guess.
 
 ## What it shows
 
@@ -98,19 +103,19 @@ Left to right: the user, the directory, the branch with its working-tree status,
 then the dim detail — direnv, how long the last command took, the clock — and
 finally a mark if that command failed.
 
-| part | where it comes from |
-| --- | --- |
-| user | `$USER`, bold, on a red surface for root |
-| directory | `$PWD`, `~` for home, three components, anchored on the repository name |
-| branch | `git status --branch`, or `.git/HEAD` with `--no-git-status` |
+| part         | where it comes from                                                                                                                     |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| user         | `$USER`, bold, on a red surface for root                                                                                                |
+| directory    | `$PWD`, `~` for home, three components, anchored on the repository name                                                                 |
+| branch       | `git status --branch`, or `.git/HEAD` with `--git=false`                                                                                |
 | working tree | `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, one glyph per category and no counts; a rebase, merge, cherry-pick or bisect in progress; a stashed change |
-| detail | `$DIRENV_DIFF`; how long the last command took (`$PROMTY_LAST_DURATION_MS`, dimmed, yellow past 2 s, red past 10 s); the clock |
-| last command | a red `×` when it failed (`$PROMTY_LAST_EXIT`) |
+| detail       | `$DIRENV_DIFF`; how long the last command took (`$PROMTY_LAST_DURATION_MS`, dimmed, yellow past 2 s, red past 10 s); the clock          |
+| last command | a red `×` when it failed (`$PROMTY_LAST_EXIT`)                                                                                          |
 
 ### The last command's duration, against the right edge
 
-`--duration-right` (or `programs.prompty.durationRight`) moves the duration out
-of the line and puts it where a prompt has room to spare: bold yellow, in plain
+`-d`/`--duration` (or `programs.prompty.duration`) moves the duration out of the
+line and puts it where a prompt has room to spare: bold yellow, in plain
 milliseconds, ending at the last column of the terminal.
 
 ```
@@ -134,13 +139,13 @@ which is also what makes the dimmed placement work.
 
 Three kept components, `~` counting as one, repository as the anchor:
 
-| working directory | label |
-| --- | --- |
-| `~/plain/a` | `~/plain/a` |
-| `~/plain/a/b` | `…/plain/a/b` |
-| `/usr/share/doc/x` | `…/share/doc/x` |
-| repository at `~/code/prompty`, cwd = root | `…/prompty` |
-| … cwd = `src/domain` | `…/prompty/src/domain` |
+| working directory                          | label                  |
+| ------------------------------------------ | ---------------------- |
+| `~/plain/a`                                | `~/plain/a`            |
+| `~/plain/a/b`                              | `…/plain/a/b`          |
+| `/usr/share/doc/x`                         | `…/share/doc/x`        |
+| repository at `~/code/prompty`, cwd = root | `…/prompty`            |
+| … cwd = `src/domain`                       | `…/prompty/src/domain` |
 
 A name longer than the whole budget is cut on a character boundary and marked
 with `…`, never written past its buffer.
@@ -149,7 +154,7 @@ with `…`, never written past its buffer.
 
 - **One subprocess, only in a repository:** a single `git status
   --porcelain=v2 --branch`. Turn it off and the branch comes from `.git/HEAD`;
-  `PROMTY_GIT_STATUS=fast` keeps the branch and the tree but skips the untracked
+  `PROMTY_GIT=fast` keeps the branch and the tree but skips the untracked
   walk and the divergence walk, which measured 6.4 ms against 9.0 ms in a
   repository with five thousand files and five hundred untracked ones. A command
   that does not answer in two seconds is killed.
@@ -170,14 +175,14 @@ with `…`, never written past its buffer.
 
 ## Environment
 
-| variable | meaning |
-| --- | --- |
-| `PROMTY_BACKGROUND` | `#rrggbb`, overrides the detected terminal background |
-| `PROMTY_GIT_STATUS` | `fast` for branch and tree only, `0`/`false` to skip the call |
-| `NO_COLOR` | set to anything to disable colour entirely |
-| `PROMTY_LAST_EXIT` | exit status of the previous command, set by the integration |
-| `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration |
-| `COLUMNS` | terminal width, passed by the integration for `--duration-right` |
+| variable                  | meaning                                                       |
+| ------------------------- | ------------------------------------------------------------- |
+| `PROMTY_BACKGROUND`       | `#rrggbb`, overrides the detected terminal background         |
+| `PROMTY_GIT`              | `fast` for branch and tree only, `0`/`false` to skip the call |
+| `NO_COLOR`                | set to anything to disable colour entirely                    |
+| `PROMTY_LAST_EXIT`        | exit status of the previous command, set by the integration   |
+| `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration      |
+| `COLUMNS`                 | terminal width, passed by the integration when timing is on   |
 
 ## Development
 

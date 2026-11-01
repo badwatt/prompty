@@ -10,13 +10,13 @@ const std = @import("std");
 const canvas = @import("../domain/canvas.zig");
 const metadata = @import("metadata.zig");
 
-/// The integration for one shell. `duration_right` bakes the option into the
+/// The integration for one shell. `duration` bakes the option into the
 /// generated script: the shell also has to pass `$COLUMNS`, because a prompt's
 /// stdout is a pipe and cannot be asked how wide the terminal is.
-pub fn script(shell: canvas.Shell, duration_right: bool) []const u8 {
+pub fn script(shell: canvas.Shell, duration: bool) []const u8 {
     return switch (shell) {
-        .zsh => if (duration_right) zsh_script_with_duration else zsh_script,
-        .bash => if (duration_right) bash_script_with_duration else bash_script,
+        .zsh => if (duration) zsh_script_with_duration else zsh_script,
+        .bash => if (duration) bash_script_with_duration else bash_script,
         .plain => "",
     };
 }
@@ -101,7 +101,7 @@ pub const bash_script = bash_head ++ metadata.name ++ bash_tail;
 /// on the command line because the shell has it and a pipe does not.
 const zsh_duration_prefix = "COLUMNS=$COLUMNS ";
 const zsh_script_with_duration = zsh_head ++ zsh_duration_prefix ++ metadata.name ++
-    " render --shell=zsh --duration-right)\"\n" ++
+    " render --shell=zsh --duration)\"\n" ++
     "    PROMPT=${rendered:-%# }\n" ++
     "  }\n" ++
     "  add-zsh-hook preexec _prompty_preexec\n" ++
@@ -145,7 +145,7 @@ const bash_head_with_duration =
     "    rendered=\"$(PROMTY_LAST_EXIT=$exit_code PROMTY_LAST_DURATION_MS=$duration_ms ";
 
 const bash_script_with_duration = bash_head_with_duration ++ bash_duration_prefix ++ metadata.name ++
-    " render --shell=bash --duration-right)\"\n" ++
+    " render --shell=bash --duration)\"\n" ++
     "    PS1=${rendered:-\\$ }\n" ++
     "  }\n" ++
     "  # PROMPT_COMMAND is a string in older bash and an array in bash 5.1+,\n" ++
@@ -219,7 +219,7 @@ test "plain has no integration because it needs no escaping" {
 test "the duration option is baked into the script, with the width" {
     const zsh = script(.zsh, true);
     try std.testing.expect(std.mem.indexOf(u8, zsh, "COLUMNS=$COLUMNS " ++ metadata.name) != null);
-    try std.testing.expect(std.mem.indexOf(u8, zsh, "render --shell=zsh --duration-right") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zsh, "render --shell=zsh --duration") != null);
     // Everything else about the integration is unchanged: the same hook, the
     // same fallback prompt.
     try std.testing.expect(std.mem.indexOf(u8, zsh, "add-zsh-hook precmd _prompty_precmd") != null);
@@ -227,11 +227,11 @@ test "the duration option is baked into the script, with the width" {
 
     const bash = script(.bash, true);
     try std.testing.expect(std.mem.indexOf(u8, bash, "COLUMNS=$COLUMNS " ++ metadata.name) != null);
-    try std.testing.expect(std.mem.indexOf(u8, bash, "render --shell=bash --duration-right") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "render --shell=bash --duration") != null);
     try std.testing.expect(std.mem.indexOf(u8, bash, "PROMPT_COMMAND=(_prompty_precmd") != null);
 
     // Without it, neither the flag nor the extra variable appears.
-    try std.testing.expect(std.mem.indexOf(u8, script(.zsh, false), "--duration-right") == null);
+    try std.testing.expect(std.mem.indexOf(u8, script(.zsh, false), "--duration") == null);
     try std.testing.expect(std.mem.indexOf(u8, script(.bash, false), "COLUMNS") == null);
 
     // The default bash integration pays nothing per command: the DEBUG trap

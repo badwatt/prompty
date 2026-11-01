@@ -25,10 +25,10 @@ pub const Options = struct {
     keep_components: u8 = 3,
     /// Ask git for the working tree status. One process, once per prompt, only
     /// inside a repository. Turn it off for the absolute fastest path.
-    git_status: bool = true,
+    git: bool = true,
     /// Show the last command's duration against the right edge of the terminal
     /// instead of dimmed after the pill.
-    duration_right: bool = false,
+    duration: bool = false,
 };
 
 /// The most directory levels prompty will walk looking for a repository. A
@@ -62,7 +62,7 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     const repository = probeRepository(host, working_directory, store, &git_dir_buffer);
     if (repository) |found| {
         model.git = found.git;
-        const mode = statusMode(host, options.git_status);
+        const mode = statusMode(host, options.git);
         if (mode != .off) {
             if (readStatus(host, mode)) |report| {
                 model.git = withStatus(found.git, report, store);
@@ -82,7 +82,7 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     const unix_seconds = host.clock.now();
     model.time = clock_mod.fromUnix(unix_seconds, host.clock.offsetAt(unix_seconds));
     model.duration_ms = parseDuration(host);
-    if (options.duration_right) {
+    if (options.duration) {
         model.duration_placement = .right;
         model.columns = columns(host);
     }
@@ -156,7 +156,7 @@ pub const StatusMode = enum {
 /// a render costs, so it is worth asking how much of it the user wants.
 fn statusMode(host: ports.Host, enabled: bool) StatusMode {
     if (!enabled) return .off;
-    const value = host.environ.get("PROMTY_GIT_STATUS") orelse return .full;
+    const value = host.environ.get("PROMTY_GIT") orelse return .full;
     if (std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "false")) return .off;
     if (std.mem.eql(u8, value, "fast")) return .fast;
     return .full;
@@ -481,7 +481,7 @@ test "the right-placement option brings the width with it" {
         .{ "COLUMNS", "120" },
         .{ "PROMTY_LAST_DURATION_MS", "1234" },
     }));
-    const model = from_shell.model(.{ .duration_right = true });
+    const model = from_shell.model(.{ .duration = true });
     try std.testing.expectEqual(prompt.DurationPlacement.right, model.duration_placement);
     try std.testing.expectEqual(@as(?u16, 120), model.columns);
     try std.testing.expectEqual(@as(?u64, 1_234), model.duration_ms);
@@ -490,17 +490,17 @@ test "the right-placement option brings the width with it" {
     // leaves the prompt with no width rather than a guess.
     var from_terminal = FakeHarness.init(&default_environment);
     from_terminal.host.terminal = .{ .width = 90 };
-    try std.testing.expectEqual(@as(?u16, 90), from_terminal.model(.{ .duration_right = true }).columns);
+    try std.testing.expectEqual(@as(?u16, 90), from_terminal.model(.{ .duration = true }).columns);
 
     var from_nowhere = FakeHarness.init(&default_environment);
-    try std.testing.expectEqual(@as(?u16, null), from_nowhere.model(.{ .duration_right = true }).columns);
+    try std.testing.expectEqual(@as(?u16, null), from_nowhere.model(.{ .duration = true }).columns);
 
     // Nonsense in COLUMNS is not a width.
     var nonsense = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
         .{ "COLUMNS", "wide" },
     }));
     nonsense.host.terminal = .{ .width = 77 };
-    try std.testing.expectEqual(@as(?u16, 77), nonsense.model(.{ .duration_right = true }).columns);
+    try std.testing.expectEqual(@as(?u16, 77), nonsense.model(.{ .duration = true }).columns);
 }
 
 test "without the option the duration stays on the line" {
@@ -812,7 +812,7 @@ test "the status cost can be capped without losing the branch" {
     // `fast` asks git for less: no untracked walk, no commit-graph walk. The
     // branch still comes back in the same porcelain header.
     var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-        .{ "PROMTY_GIT_STATUS", "fast" },
+        .{ "PROMTY_GIT", "fast" },
     }));
     harness.host.commands.response = status_porcelain;
     const model = harness.model(.{});
@@ -824,7 +824,7 @@ test "the status cost can be capped without losing the branch" {
 
 test "anything else is the full status" {
     var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-        .{ "PROMTY_GIT_STATUS", "1" },
+        .{ "PROMTY_GIT", "1" },
     }));
     harness.host.commands.response = status_porcelain;
     _ = harness.model(.{});
@@ -836,7 +836,7 @@ test "status can be switched off by the caller or the environment" {
     {
         var harness = FakeHarness.init(&default_environment);
         harness.host.commands.response = status_porcelain;
-        const model = harness.model(.{ .git_status = false });
+        const model = harness.model(.{ .git = false });
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
         try std.testing.expect(model.git.?.status.isClean());
         // The branch still comes from the files.
@@ -844,7 +844,7 @@ test "status can be switched off by the caller or the environment" {
     }
     {
         var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-            .{ "PROMTY_GIT_STATUS", "0" },
+            .{ "PROMTY_GIT", "0" },
         }));
         harness.host.commands.response = status_porcelain;
         try std.testing.expect(harness.model(.{}).git.?.status.isClean());
@@ -852,7 +852,7 @@ test "status can be switched off by the caller or the environment" {
     }
     {
         var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-            .{ "PROMTY_GIT_STATUS", "false" },
+            .{ "PROMTY_GIT", "false" },
         }));
         harness.host.commands.response = status_porcelain;
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
@@ -860,7 +860,7 @@ test "status can be switched off by the caller or the environment" {
     {
         // Anything else leaves it on.
         var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-            .{ "PROMTY_GIT_STATUS", "1" },
+            .{ "PROMTY_GIT", "1" },
         }));
         harness.host.commands.response = status_porcelain;
         _ = harness.model(.{});

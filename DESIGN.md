@@ -9,7 +9,7 @@ first, and the floor is not in this program:
 | measurement, this machine, fork+exec included | median |
 | --- | --- |
 | a 4.8 KiB static binary that does nothing but exit | **0.85 ms** |
-| prompty, no repository (`render --no-git-status`) | 0.95 ms |
+| prompty, no repository (`render --git=false`) | 0.95 ms |
 | prompty, empty directory | 0.92 ms |
 | prompty, directory with 20,000 entries | 0.92 ms |
 | prompty, this repository, `git status` on | 4.3 ms |
@@ -36,7 +36,7 @@ The budget, in order of what actually costs:
 2. **The one subprocess.** Only inside a repository. Three of the four flags
    are free to change and one is not: `--untracked-files=no` measured 5.7 ms
    against 8.4 ms in a repository with 5000 files and 500 untracked ones, which
-   is why `PROMTY_GIT_STATUS=fast` exists — and why it is not the default, since
+   is why `PROMTY_GIT=fast` exists — and why it is not the default, since
    it also removes the `?` glyph.
 3. **Directory listings.** None. A listing costs what the directory holds, not
    what the prompt shows, so the cost of a render must not depend on somebody
@@ -142,10 +142,21 @@ claims checkable rather than aspirational.
   means the default palette, an unreadable status means only the branch. There is no
   path in which a prompt fails to appear.
 
+## Boolean flags
+
+One rule, in one place (`cli.zig`): a boolean flag on its own means true, and
+`=false` turns it off, so there is a spelling for both states of every boolean
+and no second, negative name to remember. `--no-color` stays because it is the
+spelling every other program on the machine uses; it is the same switch.
+
+The value must be `true` or `false`, after an `=`. `--git=maybe` is a usage
+error: a prompt that silently guesses what somebody meant is a prompt that
+silently shows the wrong thing.
+
 ## The right-aligned duration
 
 The one segment that is not part of the line is the last command's duration, and
-it is opt-in (`--duration-right`) because it needs a number the prompt does not
+it is opt-in (`-d`/`--duration`) because it needs a number the prompt does not
 otherwise have: the terminal's width.
 
 Three ways to get it, in order of cost: `$COLUMNS` from the environment (free,
@@ -287,7 +298,7 @@ rather than a fast approximation that lies about a dirty tree.
 - **Config files.** Every option is a reason for the prompt to read another file
   and for the user to spend an evening tuning it. The palette comes from the
   terminal; the rest is a judgement call, made once. The one knob that earns its
-  place is `PROMTY_GIT_STATUS`, because it is worth a third of the render in a
+  place is `PROMTY_GIT`, because it is worth a third of the render in a
   large repository.
 - **Cross-platform adapters.** The ports are portable and the domain is pure,
   but the only adapter set is Linux. A macOS adapter is a new file behind the
