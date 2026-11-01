@@ -188,7 +188,19 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         if (model.duration_ms) |milliseconds| {
             var digits: [duration_mod.max_length]u8 = undefined;
             const label = std.fmt.bufPrint(&digits, "{d}ms", .{milliseconds}) catch unreachable;
-            canvas.text(rightPadding(model.columns, canvas.columns, width_mod.utf8(label)));
+            const label_width = width_mod.utf8(label);
+            var remaining = paddingFor(
+                canvas.buffer.len,
+                model.columns,
+                canvas.columns,
+                canvas.len,
+                label_width,
+            );
+            while (remaining > 0) {
+                const chunk = @min(remaining, spaces.len);
+                canvas.text(spaces[0..chunk]);
+                remaining -= chunk;
+            }
             paint(&canvas, model.theme.yellow, null);
             canvas.escape(bold_on);
             canvas.text(label);
@@ -199,21 +211,35 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     return canvas.bytes();
 }
 
-/// The spaces needed to end the line at the right edge. One when there is no
-/// width to align to or no room left: the number is never worth a wrapped line,
-/// but it is also never worth hiding.
-fn rightPadding(columns: ?u16, used: usize, label_width: usize) []const u8 {
-    // Without a width there is nothing to align to; the space after the chevron
-    // is already there, so the number follows it directly.
-    const total: usize = columns orelse return spaces[0..0];
-    const needed = used + label_width;
-    if (needed >= total) return spaces[0..0];
-    return spaces[0 .. total - needed];
+/// The spaces needed to end the line at the right edge.
+///
+/// None when there is no width to align to (the space after the chevron is
+/// already there) or no room left. Never more than the buffer can hold in front
+/// of the number: a terminal reported as sixty thousand columns wide must not
+/// cost the reader the number it was padded for.
+fn paddingFor(
+    room: usize,
+    columns: ?u16,
+    used_columns: usize,
+    /// The bytes written so far, which is not the same number: a Powerline
+    /// glyph is one column and four bytes, so the room left is a byte count.
+    used_bytes: usize,
+    label_width: usize,
+) usize {
+    const needed_columns = used_columns + label_width;
+    var wanted: usize = 0;
+    if (columns) |total| {
+        const total_columns: usize = total;
+        if (needed_columns < total_columns) wanted = total_columns - needed_columns;
+    }
+    const needed_bytes = used_bytes + label_width;
+    const available = if (room > needed_bytes) room - needed_bytes else 0;
+    return @min(wanted, available);
 }
 
-/// Wide enough for any terminal a prompt will meet; the slice handed out is
-/// never longer than the padding computed above.
-const spaces: [512]u8 = @splat(' ');
+/// Padding is written in chunks of this many, so that no terminal width can
+/// index past it.
+const spaces: [128]u8 = @splat(' ');
 
 fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
     if (milliseconds >= 10_000) return theme.red;
@@ -741,4 +767,39 @@ test "the inline placement never pads and the right one never doubles" {
         .columns = 40,
     };
     try std.testing.expect(std.mem.indexOf(u8, renderToString(&right), "1.2s") == null);
+}
+
+test "a wide terminal is padded to its edge" {
+    for ([_]u16{ 200, 600, 2_000 }) |columns| {
+        const model = Model{
+            .theme = fixtureTheme(),
+            .color = false,
+            .path = "~/p",
+            .duration_ms = 5,
+            .duration_placement = .right,
+            .columns = columns,
+        };
+        const rendered = renderToString(&model);
+        try std.testing.expect(std.mem.endsWith(u8, rendered, "5ms"));
+        try std.testing.expectEqual(@as(usize, columns), width_mod.utf8(rendered[1..]));
+    }
+}
+
+test "a terminal wider than the buffer keeps the number instead of the edge" {
+    // `COLUMNS` is an environment variable like any other. Sixty thousand
+    // columns must not read past the padding, and must not cost the reader the
+    // number the padding was for.
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/p",
+        .duration_ms = 5,
+        .duration_placement = .right,
+        .columns = 60_000,
+    };
+    const rendered = renderToString(&model);
+    try std.testing.expect(rendered.len <= plain_buffer_size);
+    try std.testing.expect(std.mem.endsWith(u8, rendered, "5ms"));
+    // Only the prompt and spaces: no byte of anything else leaked in.
+    for (rendered) |byte| try std.testing.expect(byte >= 0x20 or byte == '\n');
 }

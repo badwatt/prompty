@@ -247,7 +247,7 @@ what makes `programs.prompty.enable = true;` sufficient.
 
 ## Testing
 
-- 207 tests: pure domain tests, integration tests that drive the whole use case
+- 228 tests: pure domain tests, integration tests that drive the whole use case
   through the ports against a fake filesystem, clock, terminal and environment,
   and property tests that drive a seeded generator through the parsers. The
   property tests are the general form of the overflow class an audit found by

@@ -119,9 +119,15 @@ const bash_head_with_duration =
     "  shopt -u promptvars\n" ++
     "  # bash has no preexec hook: the DEBUG trap runs before each command, and\n" ++
     "  # records only the first one, which is when the command line started.\n" ++
-    "  # Parameter expansion only, so this forks nothing.\n" ++
+    "  # Parameter expansion only, so this forks nothing per command. A handler\n" ++
+    "  # the user already had is kept and run after ours, not replaced.\n" ++
     "  _prompty_started_at=\n" ++
-    "  trap '[[ -n $_prompty_started_at ]] || _prompty_started_at=${EPOCHREALTIME//[.,]/}' DEBUG\n" ++
+    "  _prompty_user_debug=$(trap -p DEBUG)\n" ++
+    "  # \"trap -- 'BODY' DEBUG\" -> BODY. The quotes in the pattern are\n" ++
+    "  # escaped so that it stays a pattern and not a quoted string.\n" ++
+    "  _prompty_user_debug=${_prompty_user_debug#*\\\'}\n" ++
+    "  _prompty_user_debug=${_prompty_user_debug%\\\'*}\n" ++
+    "  trap '[[ -n $_prompty_started_at ]] || _prompty_started_at=${EPOCHREALTIME//[.,]/}; [[ -z $_prompty_user_debug ]] || eval \"$_prompty_user_debug\"' DEBUG\n" ++
     "  _prompty_precmd() {\n" ++
     "    local exit_code=$?\n" ++
     "    local started=${_prompty_started_at:-}\n" ++
@@ -232,6 +238,14 @@ test "the duration option is baked into the script, with the width" {
     // exists only in the variant that needs a start time.
     try std.testing.expect(std.mem.indexOf(u8, script(.bash, false), "DEBUG") == null);
     try std.testing.expect(std.mem.indexOf(u8, bash, "trap ") != null);
+
+    // A DEBUG trap the user already had is kept and run, not replaced: the
+    // integration reads it back first and evaluates it from inside ours.
+    try std.testing.expect(std.mem.indexOf(u8, bash, "_prompty_user_debug=$(trap -p DEBUG)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "eval \"$_prompty_user_debug\"") != null);
+    // The strip keeps the quote escaped, or bash would swallow the rest of the
+    // script looking for its partner.
+    try std.testing.expect(std.mem.indexOf(u8, bash, "${_prompty_user_debug#*\\'}") != null);
 }
 
 test "the duration is whole milliseconds in both shells" {
