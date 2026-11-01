@@ -65,6 +65,9 @@ const powerline = struct {
     const chevron = "\u{276f}";
 };
 
+const bold_on = "\x1b[1m";
+const bold_off = "\x1b[22m";
+
 const direnv_glyph = "\u{f0d6e}";
 const clock_glyph = "\u{f051a}";
 const failure_glyph = "\u{2718}";
@@ -84,9 +87,14 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         paint(&canvas, surface, null);
         canvas.text(powerline.cap_left);
         paint(&canvas, model.theme.text, surface);
+        // The name is the one place the prompt raises its voice. Boldness is
+        // turned off with SGR 22 rather than a full reset, so the segment
+        // colours survive for the separator that follows.
+        canvas.escape(bold_on);
         canvas.text(" ");
         canvas.text(user);
         canvas.text(" ");
+        canvas.escape(bold_off);
         transition(&canvas, surface, model.theme.path_surface);
         surface = model.theme.path_surface;
     } else {
@@ -151,7 +159,7 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     }
 
     paint(&canvas, model.theme.green, null);
-    canvas.escape("\x1b[1m");
+    canvas.escape(bold_on);
     canvas.text(" " ++ powerline.chevron ++ " ");
     reset(&canvas);
     return canvas.bytes();
@@ -321,6 +329,28 @@ test "every separator leaves one surface and enters the next" {
         powerline.separator,
     }) catch unreachable;
     try std.testing.expect(std.mem.indexOf(u8, rendered, wedge) == null);
+}
+
+test "the user name is bold and the boldness ends before the separator" {
+    const theme = fixtureTheme();
+    const model = Model{
+        .theme = theme,
+        .user = "dev",
+        .path = "~/p",
+        .git = .{ .branch = "main", .operation = .none, .detached = false },
+    };
+    const rendered = renderToString(&model);
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, bold_on ++ " dev ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " " ++ bold_off) != null);
+
+    // Reset before the chevron, so the rest of the prompt keeps normal weight.
+    const bold_off_position = std.mem.indexOf(u8, rendered, bold_off).?;
+    const first_separator = std.mem.indexOf(u8, rendered, powerline.separator).?;
+    try std.testing.expect(bold_off_position < first_separator);
+
+    // Nothing else is bold except the chevron.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, rendered, bold_on));
 }
 
 test "without a user segment the cap starts the path segment" {
