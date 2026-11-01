@@ -161,11 +161,12 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         extras.text(direnv_glyph);
     }
     if (model.exit_code) |code| {
+        // One glyph, no number: an interrupted command (128 + SIGINT) and a
+        // command that exited with 1 are the same thing to a prompt, and the
+        // code is one `$?` away in the shell.
         if (code != 0) {
             extras.begin(model.theme.red);
             extras.text(failure_glyph);
-            var status: [3]u8 = undefined;
-            extras.text(std.fmt.bufPrint(&status, "{d}", .{code}) catch unreachable);
         }
     }
     if (model.duration_ms) |milliseconds| {
@@ -444,7 +445,10 @@ test "failure, direnv and several languages all appear" {
     const rendered = renderToString(&model);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{e6a9}  \u{f07d3} 1.22.3  \u{f10d3}") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{f0d6e}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{2718}130") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{2718}") != null);
+    // The exit code itself is not printed: it would only distinguish failures
+    // from each other, not add anything the prompt can act on.
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "130") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "dev merge") != null);
 }
 

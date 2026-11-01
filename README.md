@@ -142,7 +142,7 @@ prompty version                                        print name and version
 | stash       | `.git/refs/stash` or its reflog                                | 2 opens                 |
 | languages   | one directory listing, then a version file per project         | 1 read + 1 per language |
 | direnv      | `$DIRENV_DIFF`                                                 | —                       |
-| exit status | `$PROMTY_LAST_EXIT`                                            | —                       |
+| exit status | `$PROMTY_LAST_EXIT`: a `✘` when the last command failed, no number | —                       |
 | duration    | `$PROMTY_LAST_DURATION_MS`                                     | —                       |
 | clock       | `CLOCK_REALTIME` + `/etc/localtime`                            | 1 read                  |
 
