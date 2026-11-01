@@ -73,47 +73,48 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     var canvas = Canvas.init(buffer, model.shell, model.color);
     canvas.text("\n");
 
-    var next_surface: Rgb = model.theme.path_surface;
+    // The pill is a chain of surfaces. A separator is inked with the colour of
+    // the surface it leaves and filled with the colour of the one it enters;
+    // that is what makes the glyph read as an arrow. Painting it with the text
+    // colour instead leaves a bright wedge, and painting it with the same
+    // colour on both sides leaves nothing at all.
+    var surface: Rgb = model.theme.path_surface;
     if (model.user) |user| {
-        next_surface = if (model.is_root) model.theme.red else model.theme.user_surface;
-        paint(&canvas, next_surface, null);
+        surface = if (model.is_root) model.theme.red else model.theme.user_surface;
+        paint(&canvas, surface, null);
         canvas.text(powerline.cap_left);
-        paint(&canvas, model.theme.text, next_surface);
+        paint(&canvas, model.theme.text, surface);
         canvas.text(" ");
         canvas.text(user);
         canvas.text(" ");
-        canvas.text(powerline.separator);
-        setBackground(&canvas, model.theme.path_surface);
+        transition(&canvas, surface, model.theme.path_surface);
+        surface = model.theme.path_surface;
     } else {
-        paint(&canvas, model.theme.path_surface, null);
+        paint(&canvas, surface, null);
         canvas.text(powerline.cap_left);
     }
 
-    paint(&canvas, model.theme.text, model.theme.path_surface);
+    paint(&canvas, model.theme.text, surface);
     canvas.text(" ");
     canvas.text(model.path);
     canvas.text(" ");
 
     if (model.git) |repo| {
-        canvas.text(powerline.separator);
+        transition(&canvas, surface, model.theme.git_surface);
+        surface = model.theme.git_surface;
+        paint(&canvas, model.theme.text, surface);
         canvas.text(" ");
-        setBackground(&canvas, model.theme.git_surface);
-        paint(&canvas, model.theme.text, model.theme.git_surface);
         canvas.text(repo.branch);
         if (repo.operation != .none) {
-            paint(&canvas, model.theme.yellow, model.theme.git_surface);
+            paint(&canvas, model.theme.yellow, surface);
             canvas.text(" ");
             canvas.text(repo.operation.label());
-            paint(&canvas, model.theme.text, model.theme.git_surface);
+            paint(&canvas, model.theme.text, surface);
         }
         canvas.text(" ");
     }
 
-    // Close the pill: the last surface fades back into the terminal background,
-    // and the reset drops the background colour for everything that follows.
-    paint(&canvas, if (model.git != null) model.theme.git_surface else model.theme.path_surface, null);
-    canvas.text(powerline.separator);
-    reset(&canvas);
+    closePill(&canvas, surface);
 
     var extras = Extras{ .canvas = &canvas, .theme = &model.theme };
     for (model.detectedLanguages()) |language| {
@@ -190,8 +191,19 @@ fn paint(canvas: *Canvas, foreground: ?Rgb, background: ?Rgb) void {
     }
 }
 
-fn setBackground(canvas: *Canvas, background: Rgb) void {
-    canvas.escapeFmt("\x1b[48;2;{d};{d};{d}m", .{ background.r, background.g, background.b });
+/// Paints the separator that ends one segment and begins the next.
+fn transition(canvas: *Canvas, from: Rgb, to: Rgb) void {
+    paint(canvas, from, to);
+    canvas.text(powerline.separator);
+}
+
+/// Ends the pill. The ink is the last surface and the fill is the terminal's
+/// own background, which first has to be cleared: a segment's background would
+/// otherwise still be in effect and the arrow would vanish into it.
+fn closePill(canvas: *Canvas, from: Rgb) void {
+    reset(canvas);
+    paint(canvas, from, null);
+    canvas.text(powerline.separator);
 }
 
 fn reset(canvas: *Canvas) void {
@@ -258,6 +270,76 @@ test "marks root with the alert colour and keeps the cap" {
     const red_sequence = std.fmt.bufPrint(&buffer, "\x1b[38;2;{d};{d};{d}m", .{ theme.red.r, theme.red.g, theme.red.b }) catch unreachable;
     try std.testing.expect(std.mem.indexOf(u8, rendered, red_sequence) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, " root ") != null);
+}
+
+/// A separator is only an arrow when the ink is the surface being left and the
+/// fill is the surface being entered.
+fn expectSeparator(rendered: []const u8, ink: Rgb, fill: Rgb) !void {
+    var buffer: [64]u8 = undefined;
+    const sequence = std.fmt.bufPrint(&buffer, "\x1b[38;2;{d};{d};{d}m\x1b[48;2;{d};{d};{d}m{s}", .{
+        ink.r,               ink.g,  ink.b,
+        fill.r,              fill.g, fill.b,
+        powerline.separator,
+    }) catch unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, rendered, sequence) != null);
+}
+
+test "every separator leaves one surface and enters the next" {
+    const theme = fixtureTheme();
+    const model = Model{
+        .theme = theme,
+        .user = "dev",
+        .path = "~/p",
+        .git = .{ .branch = "main", .operation = .none, .detached = false },
+    };
+    const rendered = renderToString(&model);
+
+    try expectSeparator(rendered, theme.user_surface, theme.path_surface);
+    try expectSeparator(rendered, theme.path_surface, theme.git_surface);
+
+    // The pill closes onto the terminal background, so the fill is cleared
+    // first and only the ink is painted.
+    var closing_buffer: [48]u8 = undefined;
+    const closing = std.fmt.bufPrint(&closing_buffer, "\x1b[0m\x1b[38;2;{d};{d};{d}m{s}", .{
+        theme.git_surface.r,
+        theme.git_surface.g,
+        theme.git_surface.b,
+        powerline.separator,
+    }) catch unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, rendered, closing) != null);
+
+    // Three separators for three segments, never one more.
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, powerline.separator));
+
+    // And the text colour is never used as a separator's ink: that is the bug
+    // that made the arrow look like a white wedge.
+    var wrong_buffer: [32]u8 = undefined;
+    const wedge = std.fmt.bufPrint(&wrong_buffer, "\x1b[38;2;{d};{d};{d}m{s}", .{
+        theme.text.r,
+        theme.text.g,
+        theme.text.b,
+        powerline.separator,
+    }) catch unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, rendered, wedge) == null);
+}
+
+test "without a user segment the cap starts the path segment" {
+    const theme = fixtureTheme();
+    const model = Model{ .theme = theme, .path = "~/p" };
+    const rendered = renderToString(&model);
+
+    var cap_buffer: [48]u8 = undefined;
+    const cap = std.fmt.bufPrint(&cap_buffer, "\x1b[38;2;{d};{d};{d}m{s}", .{
+        theme.path_surface.r,
+        theme.path_surface.g,
+        theme.path_surface.b,
+        powerline.cap_left,
+    }) catch unreachable;
+    try std.testing.expect(std.mem.startsWith(u8, rendered[1..], cap));
+    try std.testing.expectEqual(@as(u8, '\n'), rendered[0]);
+
+    // One surface means one separator, the one that closes the pill.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, powerline.separator));
 }
 
 test "detached heads and in-progress operations are visible" {
