@@ -15,13 +15,13 @@ Every number below is a full `fork` + `exec` + render, measured on the same
 machine with the same harness, 100-300 runs each, in the same directory, with
 the default configuration of each prompt:
 
-| where | prompty | starship 1.25.1 |
-|---|---|---|
-| empty directory | **1.04 ms** | 3.08 ms |
-| a polyglot project (`package.json`, `go.mod`, `Cargo.toml`, `build.zig.zon`) | **1.05 ms** | 32.13 ms |
-| this repository (36 tracked files) | **4.82 ms** | 13.73 ms |
-| this repository, `--no-git-status` | **1.05 ms** | — |
-| binary size | **79 KiB** | 13.4 MiB |
+| where                                                                        | prompty     | starship 1.25.1 |
+| ---------------------------------------------------------------------------- | ----------- | --------------- |
+| empty directory                                                              | **1.04 ms** | 3.08 ms         |
+| a polyglot project (`package.json`, `go.mod`, `Cargo.toml`, `build.zig.zon`) | **1.05 ms** | 32.13 ms        |
+| this repository (36 tracked files)                                           | **4.82 ms** | 13.73 ms        |
+| this repository, `--no-git-status`                                           | **1.05 ms** | —               |
+| binary size                                                                  | **79 KiB**  | 13.4 MiB        |
 
 The polyglot row is 30× because of what each prompt does when it sees a
 project: starship runs `node --version`, `go version`, `cargo --version` and
@@ -48,8 +48,8 @@ Add the flake and set one option. In your home-manager configuration:
 
 ```nix
 # flake.nix
-inputs.prompty.url = "path:/path/to/prompty";   # or git+file:..., github:...
-inputs.prompty.inputs.nixpkgs.follows = "nixpkgs";   # reuse yours, fetch nothing
+inputs.prompty.url = "github:badwatt/prompty";
+inputs.prompty.inputs.nixpkgs.follows = "nixpkgs";
 
 # home-manager modules
 imports = [ inputs.prompty.homeModules.default ];
@@ -132,33 +132,33 @@ prompty version                                        print name and version
 
 ## What it shows
 
-| segment | source | cost |
-|---|---|---|
-| user | `$USER`, bold, coloured for root | — |
-| directory | `$PWD`, `~` for home, anchored on the repository name | — |
-| branch | `git status --branch`, or `.git/HEAD` without the git call | one process |
-| status | `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, no counts | (same call) |
-| operation | `rebase-merge`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `BISECT_LOG` | 5 stat-only opens |
-| stash | `.git/refs/stash` or its reflog | 2 opens |
-| languages | one directory listing, then a version file per project | 1 read + 1 per language |
-| direnv | `$DIRENV_DIFF` | — |
-| exit status | `$PROMTY_LAST_EXIT` | — |
-| duration | `$PROMTY_LAST_DURATION_MS` | — |
-| clock | `CLOCK_REALTIME` + `/etc/localtime` | 1 read |
+| segment     | source                                                         | cost                    |
+| ----------- | -------------------------------------------------------------- | ----------------------- |
+| user        | `$USER`, bold, coloured for root                               | —                       |
+| directory   | `$PWD`, `~` for home, anchored on the repository name          | —                       |
+| branch      | `git status --branch`, or `.git/HEAD` without the git call     | one process             |
+| status      | `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, no counts                         | (same call)             |
+| operation   | `rebase-merge`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `BISECT_LOG` | 5 stat-only opens       |
+| stash       | `.git/refs/stash` or its reflog                                | 2 opens                 |
+| languages   | one directory listing, then a version file per project         | 1 read + 1 per language |
+| direnv      | `$DIRENV_DIFF`                                                 | —                       |
+| exit status | `$PROMTY_LAST_EXIT`                                            | —                       |
+| duration    | `$PROMTY_LAST_DURATION_MS`                                     | —                       |
+| clock       | `CLOCK_REALTIME` + `/etc/localtime`                            | 1 read                  |
 
 ### Path truncation
 
 Three kept components, `~` counting as one, and the repository as the anchor:
 
-| working directory | label |
-|---|---|
-| `~/plain/a` | `~/plain/a` |
-| `~/plain/a/b` | `…/plain/a/b` |
-| `/usr/share/doc` | `/usr/share/doc` (the root slash does not count) |
-| `/usr/share/doc/x` | `…/share/doc/x` |
-| repository at `~/Projects/code/prompty`, cwd = repo root | `…/prompty` |
-| … cwd = `src/domain` | `…/prompty/src/domain` |
-| … cwd = `src/domain/deep/er` | `…/domain/deep/er` |
+| working directory                                        | label                                            |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| `~/plain/a`                                              | `~/plain/a`                                      |
+| `~/plain/a/b`                                            | `…/plain/a/b`                                    |
+| `/usr/share/doc`                                         | `/usr/share/doc` (the root slash does not count) |
+| `/usr/share/doc/x`                                       | `…/share/doc/x`                                  |
+| repository at `~/Projects/code/prompty`, cwd = repo root | `…/prompty`                                      |
+| … cwd = `src/domain`                                     | `…/prompty/src/domain`                           |
+| … cwd = `src/domain/deep/er`                             | `…/domain/deep/er`                               |
 
 Inside a repository the ancestors above it are replaced by `…/`, which is what
 makes the label stable no matter how deep the clone lives.
@@ -184,13 +184,13 @@ slow. So it is one subprocess, and it can be switched off.
 
 ## Environment
 
-| variable | meaning |
-|---|---|
-| `PROMTY_BACKGROUND` | `#rrggbb`, overrides the detected terminal background |
-| `PROMTY_GIT_STATUS` | `0`/`false` to skip the `git status` call entirely |
-| `NO_COLOR` | set to anything to disable colour entirely |
-| `PROMTY_LAST_EXIT` | exit status of the previous command, set by the integration |
-| `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration |
+| variable                  | meaning                                                     |
+| ------------------------- | ----------------------------------------------------------- |
+| `PROMTY_BACKGROUND`       | `#rrggbb`, overrides the detected terminal background       |
+| `PROMTY_GIT_STATUS`       | `0`/`false` to skip the `git status` call entirely          |
+| `NO_COLOR`                | set to anything to disable colour entirely                  |
+| `PROMTY_LAST_EXIT`        | exit status of the previous command, set by the integration |
+| `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration    |
 
 ## Development
 
