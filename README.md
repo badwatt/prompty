@@ -134,6 +134,9 @@ bash has no right-hand prompt, and faking one by padding the string breaks
 readline's idea of where the cursor is, so there `--duration` wires up the timing
 and the number stays next to the prompt, dimmed, as before.
 
+Because it is `RPROMPT`, this option owns that slot while it is on: if something
+else of yours writes a right prompt, the two will overwrite each other.
+
 Timing the command is the shell's job, and the two do it differently: zsh has a
 `preexec` hook, bash has only a `DEBUG` trap, so the bash trap is generated only
 when this option is on — the default bash integration still costs nothing per
@@ -220,7 +223,7 @@ Linux, Zig 0.17, and a terminal that answers the OSC 11 background query (or
 src/domain/       pure: colours, path shortening, durations, TZif, git porcelain, rendering
 src/ports/        the six interfaces the outside world is reduced to
 src/adapters/     Linux syscalls and one fork/exec behind those interfaces
-src/application/  the use case, the command line and the shell scripts
+src/application/  the use case, repository discovery, the command line, the shell scripts
 src/main.zig      composition root: the only file that knows both sides
 nix/              package, manifest reader and the home-manager module
 tools/            coverage gate and benchmark
