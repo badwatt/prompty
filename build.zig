@@ -10,8 +10,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     // A prompt runs for every command a human types, so the default build is
     // ReleaseFast with debug information stripped: 71 KiB instead of 12 MiB,
-    // and 0.7 ms instead of 1.2 ms per prompt. Ask for `-Ddebug` when you want
-    // to attach a debugger.
+    // and 0.7 ms instead of 1.2 ms per prompt. `-Dmode=debug` builds one you can
+    // attach a debugger to; `-Dmode=safe` turns the runtime checks on.
     // An explicit switch rather than `standardOptimizeOption`: `zig build` must
     // produce the fast binary by default, and `-Dmode=safe` must really produce
     // one with the runtime safety checks on, which is what audits need.
@@ -115,11 +115,15 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     prepare.addArg("-p");
     prepare.addArg(b.fmt("{s}/tests", .{output_root}));
     prepare.addArg(b.fmt("{s}/merged", .{output_root}));
+    prepare.has_side_effects = true;
 
     const test_run = b.addSystemCommand(&.{ kcov, "--clean", include, b.fmt("{s}/tests", .{output_root}) });
     test_run.addArtifactArg(test_binary);
     test_run.expectExitCode(0);
     test_run.step.dependOn(&prepare.step);
+    // Every one of these steps writes into the coverage directory: caching them
+    // would mean a stale, or empty, report after the directory is removed.
+    test_run.has_side_effects = true;
 
     // The installed binary is traced too: `main` and the real adapters only run
     // when the real process runs.
@@ -138,6 +142,7 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
 
     var merge = b.addSystemCommand(&.{ kcov, "--merge", b.fmt("{s}/merged", .{output_root}) });
     merge.step.dependOn(&test_run.step);
+    merge.has_side_effects = true;
     merge.addArg(b.fmt("{s}/tests", .{output_root}));
 
     for (scenarios, 0..) |scenario, index| {
@@ -149,6 +154,7 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
         run.addArgs(scenario.arguments);
         run.expectExitCode(scenario.expected_exit);
         run.step.dependOn(&prepare.step);
+        run.has_side_effects = true;
         merge.step.dependOn(&run.step);
         merge.addArg(directory);
     }
@@ -160,6 +166,7 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     const checker = b.addExecutable(.{ .name = "check-coverage", .root_module = checker_module });
     const check = b.addRunArtifact(checker);
     check.step.dependOn(&merge.step);
+    check.has_side_effects = true;
     check.addArg(b.fmt("{s}/merged/kcov-merged/coverage.json", .{output_root}));
     check.addArg(source_root);
     return &check.step;
