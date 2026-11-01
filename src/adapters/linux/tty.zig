@@ -47,31 +47,7 @@ pub const Tty = struct {
         };
     }
 
-    const vtable = ports.Terminal.VTable{ .background = background, .columns = columns };
-
-    /// `struct winsize`, which ioctl TIOCGWINSZ fills in.
-    const Winsize = extern struct {
-        rows: u16,
-        cols: u16,
-        x_pixels: u16,
-        y_pixels: u16,
-    };
-
-    fn columns(ptr: *anyopaque) ?u16 {
-        const self: *const Tty = @ptrCast(@alignCast(ptr));
-        const device = posix.openat(linux.AT.FDCWD, self.device_path, .{
-            .ACCMODE = .RDONLY,
-            .NOCTTY = true,
-            .CLOEXEC = true,
-        }, 0) catch return null;
-        defer _ = linux.close(device);
-
-        var size: Winsize = std.mem.zeroes(Winsize);
-        const result = linux.ioctl(device, TIOCGWINSZ, @intFromPtr(&size));
-        if (linux.errno(result) != .SUCCESS) return null;
-        if (size.cols == 0) return null;
-        return size.cols;
-    }
+    const vtable = ports.Terminal.VTable{ .background = background };
 
     fn background(ptr: *anyopaque, buffer: []u8) ?[]const u8 {
         const self: *const Tty = @ptrCast(@alignCast(ptr));
@@ -194,8 +170,6 @@ pub const Tty = struct {
 // to get wrong.
 // ---------------------------------------------------------------------------
 
-const TIOCGWINSZ = 0x5413;
-const TIOCSWINSZ = 0x5414;
 const TIOCSPTLCK = 0x40045431;
 const TIOCGPTN = 0x80045430;
 
@@ -238,11 +212,6 @@ const Pty = struct {
     fn close(self: Pty) void {
         _ = linux.close(self.slave);
         _ = linux.close(self.master);
-    }
-
-    fn resize(self: Pty, cols: u16, rows: u16) void {
-        var size: Tty.Winsize = .{ .rows = rows, .cols = cols, .x_pixels = 0, .y_pixels = 0 };
-        std.debug.assert(linux.errno(linux.ioctl(self.master, TIOCSWINSZ, @intFromPtr(&size))) == .SUCCESS);
     }
 
     fn answer(self: Pty, reply: []const u8) void {
@@ -406,30 +375,4 @@ test "the terminator is found wherever it lands" {
     // A terminal that keeps talking does not hide the terminator.
     try std.testing.expectEqual(@as(?usize, reply_text.len), Tty.replyEnd(reply_text ++ "straggler"));
     try std.testing.expectEqual(@as(?usize, 1), Tty.replyEnd("\x07"));
-}
-
-test "the terminal reports its width, and a pipe does not" {
-    const pty = Pty.open();
-    defer pty.close();
-
-    var path_buffer: [32]u8 = undefined;
-    // A pseudo-terminal starts with no window size at all: the width has to be
-    // set before it can be read back, exactly as a real terminal would.
-    const empty = Tty{ .device_path = pty.path(&path_buffer) };
-    try std.testing.expectEqual(@as(?u16, null), empty.terminal().columns());
-    pty.resize(100, 30);
-
-    const adapter = Tty{ .device_path = pty.path(&path_buffer) };
-    try std.testing.expectEqual(@as(u16, 100), adapter.terminal().columns().?);
-
-    // A pipe has no window size to report.
-    var pipe: [2]posix.fd_t = undefined;
-    std.debug.assert(linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) == .SUCCESS);
-    defer _ = linux.close(pipe[0]);
-    defer _ = linux.close(pipe[1]);
-    var pipe_path: [32]u8 = undefined;
-    const from_pipe = Tty{
-        .device_path = std.fmt.bufPrint(&pipe_path, "/proc/self/fd/{d}", .{pipe[0]}) catch unreachable,
-    };
-    try std.testing.expectEqual(@as(?u16, null), from_pipe.terminal().columns());
 }

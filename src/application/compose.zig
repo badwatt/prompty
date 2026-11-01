@@ -82,10 +82,9 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     const unix_seconds = host.clock.now();
     model.time = clock_mod.fromUnix(unix_seconds, host.clock.offsetAt(unix_seconds));
     model.duration_ms = parseDuration(host);
-    if (options.duration) {
-        model.duration_placement = .right;
-        model.columns = columns(host);
-    }
+    // A right edge to put it on exists in one shell: zsh's `RPROMPT`. Anywhere
+    // else the same number goes inline, which is what those shells can draw.
+    if (options.duration and options.shell == .zsh) model.duration_placement = .right;
     model.exit_code = parseExitCode(host);
     model.direnv = direnvActive(host);
     return model;
@@ -243,19 +242,6 @@ fn parseDuration(host: ports.Host) ?u64 {
     if (milliseconds == 0) return null;
     if (milliseconds > max_duration_ms) return null;
     return milliseconds;
-}
-
-/// The terminal width, from the shell first: the integration passes `$COLUMNS`
-/// on the same command line because a prompt's stdout is a pipe and cannot be
-/// asked. A terminal that does not answer and a shell that does not export the
-/// variable both mean "no width", never a guessed one.
-fn columns(host: ports.Host) ?u16 {
-    if (host.environ.get("COLUMNS")) |value| {
-        const trimmed = std.mem.trim(u8, value, " \t");
-        const parsed = std.fmt.parseInt(u16, trimmed, 10) catch 0;
-        if (parsed > 0) return parsed;
-    }
-    return host.terminal.columns();
 }
 
 fn parseExitCode(host: ports.Host) ?u8 {
@@ -474,43 +460,29 @@ test "collects every fact from a fake project" {
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
 }
 
-test "the right-placement option brings the width with it" {
-    // The shell passes COLUMNS because the prompt's own stdout is a pipe; the
-    // terminal is only asked when the shell did not say.
-    var from_shell = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-        .{ "COLUMNS", "120" },
+test "the right edge is zsh's, so only zsh gets it" {
+    // RPROMPT is the only mechanism that keeps the cursor after the chevron
+    // while putting the number at the edge. bash and the plain output have
+    // none, so the same option leaves the duration where they can draw it.
+    const environment = default_environment ++ [_][2][]const u8{
         .{ "PROMTY_LAST_DURATION_MS", "1234" },
-    }));
-    const model = from_shell.model(.{ .duration = true });
-    try std.testing.expectEqual(prompt.DurationPlacement.right, model.duration_placement);
-    try std.testing.expectEqual(@as(?u16, 120), model.columns);
-    try std.testing.expectEqual(@as(?u64, 1_234), model.duration_ms);
-
-    // Without COLUMNS the terminal is asked, and a terminal that does not know
-    // leaves the prompt with no width rather than a guess.
-    var from_terminal = FakeHarness.init(&default_environment);
-    from_terminal.host.terminal = .{ .width = 90 };
-    try std.testing.expectEqual(@as(?u16, 90), from_terminal.model(.{ .duration = true }).columns);
-
-    var from_nowhere = FakeHarness.init(&default_environment);
-    try std.testing.expectEqual(@as(?u16, null), from_nowhere.model(.{ .duration = true }).columns);
-
-    // Nonsense in COLUMNS is not a width.
-    var nonsense = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
-        .{ "COLUMNS", "wide" },
-    }));
-    nonsense.host.terminal = .{ .width = 77 };
-    try std.testing.expectEqual(@as(?u16, 77), nonsense.model(.{ .duration = true }).columns);
+    };
+    for ([_]canvas.Shell{ .zsh, .bash, .plain }) |shell| {
+        var harness = FakeHarness.init(&environment);
+        const model = harness.model(.{ .duration = true, .shell = shell });
+        const expected: prompt.DurationPlacement =
+            if (shell == .zsh) .right else .line;
+        try std.testing.expectEqual(expected, model.duration_placement);
+        try std.testing.expectEqual(@as(?u64, 1_234), model.duration_ms);
+    }
 }
 
 test "without the option the duration stays on the line" {
     var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
         .{ "PROMTY_LAST_DURATION_MS", "1234" },
-        .{ "COLUMNS", "120" },
     }));
     const model = harness.model(.{});
     try std.testing.expectEqual(prompt.DurationPlacement.line, model.duration_placement);
-    try std.testing.expectEqual(@as(?u16, null), model.columns);
 }
 
 test "an absurdly long user name cannot take over the line" {

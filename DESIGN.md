@@ -156,30 +156,24 @@ silently shows the wrong thing.
 ## The right-aligned duration
 
 The one segment that is not part of the line is the last command's duration, and
-it is opt-in (`-d`/`--duration`) because it needs a number the prompt does not
-otherwise have: the terminal's width.
+it is opt-in (`-d`/`--duration`). The first attempt padded the line so the number
+ended at the right edge, and it was wrong in a way no pseudo-terminal test could
+see: the cursor then sat after the number, and typing continued from there.
 
-Three ways to get it, in order of cost: `$COLUMNS` from the environment (free,
-but a shell does not export it — the generated integration passes `COLUMNS=$COLUMNS`
-on the command line), `TIOCGWINSZ` on `/dev/tty` (two syscalls, and the only
-option that works with no cooperation from the shell), and nothing (never a
-guessed 80: an alignment to the wrong column is worse than no alignment).
+What a prompt actually needs is two strings. zsh has a right-hand prompt —
+`RPROMPT` — which it draws against the right edge, redraws as the line is edited,
+and hides when the line grows into it. The cursor stays after the chevron, which
+is where the typing goes, and nothing has to know the terminal's width.
 
-Knowing the width is the easy half. The hard half is knowing how much of the
-line is already used, which is not the byte count: a Powerline separator is three
-bytes and one column, and a directory called `日本語` is six columns in nine
-bytes. `domain/width.zig` is the part of `wcwidth` a prompt needs — wide ranges,
-combining marks, control characters — and `Canvas` counts columns as it writes,
-ignoring the escape sequences it emits for itself.
+So `render --duration` prints the line, a `0x1f`, and the segment for the right
+edge; the generated zsh integration splits on that byte and assigns `PROMPT` and
+`RPROMPT`. The separator is a control character no name can contain, and every
+name has its control bytes replaced before it reaches the renderer.
 
-Three consequences worth stating. The line stops **one column short**: a prompt
-whose last cell is filled leaves the terminal in "wrap pending", and the first
-character typed lands at the start of the next line — measured in a real terminal
-(ninety-nine columns keeps the typing on the line; a hundred does not). A line
-already wider than the terminal gets no padding at all, because wrapping a prompt
-corrupts the redraw and the number is not worth it. And the segment is bold but
-not coloured by severity: the yellow is the point, and the escalation logic
-already lives in the dimmed placement.
+bash has no right prompt, and a padded `PS1` breaks readline's redraw, so there
+the option wires up only the timing and the number stays inline. That is the
+honest split: the shell that can do it does, and the one that cannot keeps what
+it had.
 
 Timing is the shell's half, and it had to be fixed to make any of this visible:
 zsh computes the difference in floating point, so it was passing

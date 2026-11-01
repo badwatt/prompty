@@ -15,7 +15,6 @@ const duration_mod = @import("duration.zig");
 const git_mod = @import("git.zig");
 const git_status_mod = @import("git_status.zig");
 const theme_mod = @import("theme.zig");
-const width_mod = @import("width.zig");
 
 const Canvas = canvas_mod.Canvas;
 const Rgb = theme_mod.Rgb;
@@ -54,9 +53,6 @@ pub const Model = struct {
     time: ?clock_mod.TimeOfDay = null,
     duration_ms: ?u64 = null,
     duration_placement: DurationPlacement = .line,
-    /// Terminal width in columns, when the shell or the terminal can tell us.
-    /// Without it `right` has nothing to align to and falls back to one space.
-    columns: ?u16 = null,
     exit_code: ?u8 = null,
     direnv: bool = false,
 };
@@ -185,22 +181,13 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     reset(&canvas);
 
     if (model.duration_placement == .right) {
+        // The right segment is a second string, not padding: zsh draws it
+        // against the right edge with `RPROMPT` and leaves the cursor after the
+        // chevron, so the prompt never has to know how wide the terminal is.
+        canvas.text(&[_]u8{split});
         if (model.duration_ms) |milliseconds| {
             var digits: [duration_mod.max_length]u8 = undefined;
             const label = std.fmt.bufPrint(&digits, "{d}ms", .{milliseconds}) catch unreachable;
-            const label_width = width_mod.utf8(label);
-            var remaining = paddingFor(
-                canvas.buffer.len,
-                model.columns,
-                canvas.columns,
-                canvas.len,
-                label_width,
-            );
-            while (remaining > 0) {
-                const chunk = @min(remaining, spaces.len);
-                canvas.text(spaces[0..chunk]);
-                remaining -= chunk;
-            }
             paint(&canvas, model.theme.yellow, null);
             canvas.escape(bold_on);
             canvas.text(label);
@@ -211,39 +198,10 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     return canvas.bytes();
 }
 
-/// The spaces needed to end the line at the right edge.
-///
-/// None when there is no width to align to (the space after the chevron is
-/// already there) or no room left. Never more than the buffer can hold in front
-/// of the number: a terminal reported as sixty thousand columns wide must not
-/// cost the reader the number it was padded for.
-fn paddingFor(
-    room: usize,
-    columns: ?u16,
-    used_columns: usize,
-    /// The bytes written so far, which is not the same number: a Powerline
-    /// glyph is one column and four bytes, so the room left is a byte count.
-    used_bytes: usize,
-    label_width: usize,
-) usize {
-    const needed_columns = used_columns + label_width;
-    var wanted: usize = 0;
-    if (columns) |total| {
-        // One column is left free at the right edge. A line that fills the last
-        // cell leaves the terminal in "wrap pending", and the first character
-        // typed then lands at the start of the next line instead of after the
-        // prompt; with the cell free the cursor waits where the typing goes.
-        const target: usize = if (total > 1) total - 1 else 0;
-        if (needed_columns < target) wanted = target - needed_columns;
-    }
-    const needed_bytes = used_bytes + label_width;
-    const available = if (room > needed_bytes) room - needed_bytes else 0;
-    return @min(wanted, available);
-}
-
-/// Padding is written in chunks of this many, so that no terminal width can
-/// index past it.
-const spaces: [128]u8 = @splat(' ');
+/// Separates the line from the segment the shell puts at the right edge. It is
+/// a control character nobody types and no name contains, so no path or branch
+/// can forge it.
+pub const split = 0x1f;
 
 fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
     if (milliseconds >= 10_000) return theme.red;
@@ -683,71 +641,68 @@ test "the buffer bound is never exceeded by a maximal prompt" {
     );
 }
 
-test "the right-aligned duration ends one column short, in bold milliseconds" {
+test "the right-aligned duration travels after a separator, not as padding" {
+    const theme = fixtureTheme();
     const model = Model{
-        .theme = fixtureTheme(),
+        .theme = theme,
         .color = false,
         .path = "~/p",
         .time = .{ .hour = 12, .minute = 4 },
         .duration_ms = 1_234,
         .duration_placement = .right,
-        .columns = 40,
     };
     const rendered = renderToString(&model);
 
-    // The line, then the padding, then the number: one column short of the 40,
-    // which is where the cursor waits for typing.
-    const line = rendered[1..]; // skip the leading newline
-    try std.testing.expectEqual(@as(usize, 39), width_mod.utf8(line));
-    try std.testing.expect(std.mem.endsWith(u8, line, "1234ms"));
-    // Milliseconds, not the human form, and not twice.
-    try std.testing.expect(std.mem.indexOf(u8, line, "1.2s") == null);
+    // The line itself is exactly what the inline placement produces, with the
+    // separator and the number after it: no padding, and no width involved.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
+    const left = rendered[0..std.mem.indexOfScalar(u8, rendered, split).?];
+    try std.testing.expect(std.mem.endsWith(u8, left, "\u{276f} "));
+    try std.testing.expectEqualStrings("1234ms", rendered[left.len + 1 ..]);
 
     // Bold yellow, and only for the number.
-    const with_color = Model{
-        .theme = model.theme,
+    const colored = Model{
+        .theme = theme,
         .path = "~/p",
         .time = model.time,
         .duration_ms = 1_234,
         .duration_placement = .right,
-        .columns = 40,
     };
-    const colored = renderToString(&with_color);
+    const with_color = renderToString(&colored);
     var expected: [96]u8 = undefined;
     const sequence = std.fmt.bufPrint(&expected, "\x1b[38;2;{d};{d};{d}m\x1b[1m1234ms", .{
-        with_color.theme.yellow.r,
-        with_color.theme.yellow.g,
-        with_color.theme.yellow.b,
+        theme.yellow.r,
+        theme.yellow.g,
+        theme.yellow.b,
     }) catch unreachable;
-    try std.testing.expect(std.mem.indexOf(u8, colored, sequence) != null);
+    try std.testing.expect(std.mem.indexOf(u8, with_color, sequence) != null);
 }
 
-test "without a width the duration still shows, one space after the chevron" {
+test "without a duration the right segment is empty, never missing" {
+    // The shell splits on the separator unconditionally: it has to be there
+    // even when there is nothing to put on the right.
     const model = Model{
         .theme = fixtureTheme(),
         .color = false,
         .path = "~/p",
-        .duration_ms = 7,
         .duration_placement = .right,
     };
-    try std.testing.expectEqualStrings(
-        "\n\u{e0b6} ~/p \u{e0b0} \u{276f} 7ms",
-        renderToString(&model),
-    );
+    const rendered = renderToString(&model);
+    try std.testing.expect(std.mem.endsWith(u8, rendered, &[_]u8{split}));
 }
 
-test "a prompt that does not fit leaves one space rather than wrapping" {
+test "a name cannot forge the separator" {
+    // The separator is a control byte, and every name the prompt shows has its
+    // control bytes replaced before it gets here.
     const model = Model{
         .theme = fixtureTheme(),
         .color = false,
-        .path = "~/a-very-long-path-name",
-        .duration_ms = 1,
+        .path = "~/p",
         .duration_placement = .right,
-        .columns = 10,
+        .duration_ms = 5,
     };
     const rendered = renderToString(&model);
-    try std.testing.expect(std.mem.endsWith(u8, rendered, "\u{276f} 1ms"));
-    try std.testing.expect(width_mod.utf8(rendered[1..]) > 10);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
 }
 
 test "the inline placement never pads and the right one never doubles" {
@@ -757,7 +712,6 @@ test "the inline placement never pads and the right one never doubles" {
         .color = false,
         .path = "~/p",
         .duration_ms = 1_234,
-        .columns = 40,
     };
     try std.testing.expect(std.mem.endsWith(u8, renderToString(&dimmed), "\u{276f} "));
 
@@ -769,44 +723,6 @@ test "the inline placement never pads and the right one never doubles" {
         .path = "~/p",
         .duration_ms = 1_234,
         .duration_placement = .right,
-        .columns = 40,
     };
     try std.testing.expect(std.mem.indexOf(u8, renderToString(&right), "1.2s") == null);
-}
-
-test "a wide terminal is padded to one column short of its edge" {
-    for ([_]u16{ 200, 600, 2_000 }) |columns| {
-        const model = Model{
-            .theme = fixtureTheme(),
-            .color = false,
-            .path = "~/p",
-            .duration_ms = 5,
-            .duration_placement = .right,
-            .columns = columns,
-        };
-        const rendered = renderToString(&model);
-        try std.testing.expect(std.mem.endsWith(u8, rendered, "5ms"));
-        // One column short of the edge, so the cursor has somewhere to wait for
-        // the first character typed.
-        try std.testing.expectEqual(@as(usize, columns - 1), width_mod.utf8(rendered[1..]));
-    }
-}
-
-test "a terminal wider than the buffer keeps the number instead of the edge" {
-    // `COLUMNS` is an environment variable like any other. Sixty thousand
-    // columns must not read past the padding, and must not cost the reader the
-    // number the padding was for.
-    const model = Model{
-        .theme = fixtureTheme(),
-        .color = false,
-        .path = "~/p",
-        .duration_ms = 5,
-        .duration_placement = .right,
-        .columns = 60_000,
-    };
-    const rendered = renderToString(&model);
-    try std.testing.expect(rendered.len <= plain_buffer_size);
-    try std.testing.expect(std.mem.endsWith(u8, rendered, "5ms"));
-    // Only the prompt and spaces: no byte of anything else leaked in.
-    for (rendered) |byte| try std.testing.expect(byte >= 0x20 or byte == '\n');
 }

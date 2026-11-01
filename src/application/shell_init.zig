@@ -11,8 +11,10 @@ const canvas = @import("../domain/canvas.zig");
 const metadata = @import("metadata.zig");
 
 /// The integration for one shell. `duration` bakes the option into the
-/// generated script: the shell also has to pass `$COLUMNS`, because a prompt's
-/// stdout is a pipe and cannot be asked how wide the terminal is.
+/// generated script, which for zsh means writing `RPROMPT`: that is what keeps
+/// the number at the right edge and the cursor after the chevron while the line
+/// is edited. bash has no right prompt, so there the duration stays next to the
+/// prompt, in the dimmed placement.
 pub fn script(shell: canvas.Shell, duration: bool) []const u8 {
     return switch (shell) {
         .zsh => if (duration) zsh_script_with_duration else zsh_script,
@@ -97,12 +99,18 @@ const bash_tail =
 pub const zsh_script = zsh_head ++ metadata.name ++ zsh_tail;
 pub const bash_script = bash_head ++ metadata.name ++ bash_tail;
 
-/// Same scripts with the duration moved to the right edge. `COLUMNS` is passed
-/// on the command line because the shell has it and a pipe does not.
-const zsh_duration_prefix = "COLUMNS=$COLUMNS ";
-const zsh_script_with_duration = zsh_head ++ zsh_duration_prefix ++ metadata.name ++
+/// The same script, with the duration in `RPROMPT`.
+///
+/// The binary prints the line, a separator, and the segment for the right edge;
+/// splitting them here is what gives the prompt its two halves. `RPROMPT` is
+/// zsh's own right-hand prompt: it is drawn at the edge, redrawn as the line is
+/// edited, and hidden when the line grows into it — none of which a padded
+/// string can do.
+const zsh_script_with_duration = zsh_head ++ metadata.name ++
     " render --shell=zsh --duration)\"\n" ++
-    "    PROMPT=${rendered:-%# }\n" ++
+    "    PROMPT=${rendered%%$'\\x1f'*}\n" ++
+    "    RPROMPT=${rendered#*$'\\x1f'}\n" ++
+    "    [[ -n $PROMPT ]] || PROMPT='%# '\n" ++
     "  }\n" ++
     "  add-zsh-hook preexec _prompty_preexec\n" ++
     "  add-zsh-hook precmd _prompty_precmd\n" ++
@@ -144,8 +152,11 @@ const bash_head_with_duration =
     "    local rendered\n" ++
     "    rendered=\"$(PROMTY_LAST_EXIT=$exit_code PROMTY_LAST_DURATION_MS=$duration_ms ";
 
-const bash_script_with_duration = bash_head_with_duration ++ bash_duration_prefix ++ metadata.name ++
-    " render --shell=bash --duration)\"\n" ++
+/// bash has no right prompt, and lying about the width in `PS1` would break
+/// readline's redraw. The timing is wired up, and the number stays where bash
+/// can put it: after the prompt, dimmed.
+const bash_script_with_duration = bash_head_with_duration ++ metadata.name ++
+    " render --shell=bash)\"\n" ++
     "    PS1=${rendered:-\\$ }\n" ++
     "  }\n" ++
     "  # PROMPT_COMMAND is a string in older bash and an array in bash 5.1+,\n" ++
@@ -164,8 +175,6 @@ const bash_script_with_duration = bash_head_with_duration ++ bash_duration_prefi
     "      ;;\n" ++
     "  esac\n" ++
     "fi\n";
-
-const bash_duration_prefix = "COLUMNS=$COLUMNS ";
 
 test "every interactive shell gets a loadable script" {
     try std.testing.expect(std.mem.startsWith(u8, zsh_script, "# prompty shell integration for zsh"));
@@ -216,36 +225,31 @@ test "plain has no integration because it needs no escaping" {
     try std.testing.expectEqualStrings(bash_script, script(.bash, false));
 }
 
-test "the duration option is baked into the script, with the width" {
+test "the duration option bakes RPROMPT into the zsh script" {
     const zsh = script(.zsh, true);
-    try std.testing.expect(std.mem.indexOf(u8, zsh, "COLUMNS=$COLUMNS " ++ metadata.name) != null);
     try std.testing.expect(std.mem.indexOf(u8, zsh, "render --shell=zsh --duration") != null);
-    // Everything else about the integration is unchanged: the same hook, the
-    // same fallback prompt.
+    // The two halves: the line, and the segment zsh keeps at the right edge.
+    try std.testing.expect(std.mem.indexOf(u8, zsh, "PROMPT=${rendered%%$'\\x1f'*}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zsh, "RPROMPT=${rendered#*$'\\x1f'}") != null);
+    // Nothing about the terminal's width: RPROMPT does the placing.
+    try std.testing.expect(std.mem.indexOf(u8, zsh, "COLUMNS") == null);
+    // Everything else about the integration is unchanged.
     try std.testing.expect(std.mem.indexOf(u8, zsh, "add-zsh-hook precmd _prompty_precmd") != null);
-    try std.testing.expect(std.mem.indexOf(u8, zsh, "PROMPT=${rendered:-%# }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zsh, "[[ -n $PROMPT ]] || PROMPT='%# '") != null);
 
-    const bash = script(.bash, true);
-    try std.testing.expect(std.mem.indexOf(u8, bash, "COLUMNS=$COLUMNS " ++ metadata.name) != null);
-    try std.testing.expect(std.mem.indexOf(u8, bash, "render --shell=bash --duration") != null);
-    try std.testing.expect(std.mem.indexOf(u8, bash, "PROMPT_COMMAND=(_prompty_precmd") != null);
-
-    // Without it, neither the flag nor the extra variable appears.
+    // Without it, neither the flag nor a right prompt appears.
     try std.testing.expect(std.mem.indexOf(u8, script(.zsh, false), "--duration") == null);
-    try std.testing.expect(std.mem.indexOf(u8, script(.bash, false), "COLUMNS") == null);
+    try std.testing.expect(std.mem.indexOf(u8, script(.zsh, false), "RPROMPT") == null);
+}
 
-    // The default bash integration pays nothing per command: the DEBUG trap
-    // exists only in the variant that needs a start time.
-    try std.testing.expect(std.mem.indexOf(u8, script(.bash, false), "DEBUG") == null);
+test "the bash script times the command but keeps the number on the line" {
+    // bash has no right prompt; faking one by padding a prompt string breaks
+    // readline's idea of where the cursor is.
+    const bash = script(.bash, true);
     try std.testing.expect(std.mem.indexOf(u8, bash, "trap ") != null);
-
-    // A DEBUG trap the user already had is kept and run, not replaced: the
-    // integration reads it back first and evaluates it from inside ours.
-    try std.testing.expect(std.mem.indexOf(u8, bash, "_prompty_user_debug=$(trap -p DEBUG)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, bash, "eval \"$_prompty_user_debug\"") != null);
-    // The strip keeps the quote escaped, or bash would swallow the rest of the
-    // script looking for its partner.
-    try std.testing.expect(std.mem.indexOf(u8, bash, "${_prompty_user_debug#*\\'}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "PROMTY_LAST_DURATION_MS=$duration_ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash, "--duration") == null);
+    try std.testing.expect(std.mem.indexOf(u8, script(.bash, false), "DEBUG") == null);
 }
 
 test "the duration is whole milliseconds in both shells" {

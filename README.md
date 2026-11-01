@@ -116,21 +116,23 @@ finally a mark if that command failed.
 
 `-d`/`--duration` (or `programs.prompty.duration`) moves the duration out of the
 line and puts it where a prompt has room to spare: bold yellow, in plain
-milliseconds, ending at the last column of the terminal.
+milliseconds, against the right edge of the terminal, while the cursor stays
+right after the chevron.
 
 ```
- badwatt  …/prompty  main !  14:32 ❯                                   1234ms
+ badwatt  …/prompty  main !  14:32 ❯  (cursor)                        1234ms
 ```
 
-It replaces the dimmed `1.2s`, so the number is never shown twice. The line stops
-one column short of the edge on purpose: a prompt that fills the last cell leaves
-the terminal waiting to wrap, and the first character typed then jumps to the
-next line instead of following the prompt. The width comes from `$COLUMNS`, which
-the generated integration passes on the command line — a prompt's stdout is a
-pipe and cannot be asked. A terminal that does not
-report its width and a shell that does not export the variable mean no padding
-rather than a guessed one, and a prompt already wider than the terminal is left
-alone rather than wrapped.
+It replaces the dimmed `1.2s`, so the number is never shown twice. The cursor
+stays where it belongs — right after the chevron, where you type — because the
+number is not padding inside the line: the integration puts it in zsh's
+`RPROMPT`, the shell's own right-hand prompt. That is what keeps it anchored at
+the edge while you type, redraws it as the line is edited, and hides it when the
+command grows long enough to reach it.
+
+bash has no right-hand prompt, and faking one by padding the string breaks
+readline's idea of where the cursor is, so there `--duration` wires up the timing
+and the number stays next to the prompt, dimmed, as before.
 
 Timing the command is the shell's job, and the two do it differently: zsh has a
 `preexec` hook, bash has only a `DEBUG` trap, so the bash trap is generated only
@@ -185,7 +187,6 @@ with `…`, never written past its buffer.
 | `NO_COLOR`                | set to anything to disable colour entirely                    |
 | `PROMTY_LAST_EXIT`        | exit status of the previous command, set by the integration   |
 | `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration      |
-| `COLUMNS`                 | terminal width, passed by the integration when timing is on   |
 
 ## Development
 
