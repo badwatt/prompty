@@ -29,9 +29,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: mlugg/setup-zig@v2
+      # Ubuntu 24.04 has no kcov package ("Unable to locate package kcov"), and
+      # the project's rule is 100% of lines, which used to be checked only by
+      # whoever remembered to run it. kcov comes from nixpkgs, which the flake
+      # already pins.
+      - uses: nixbuild/nix-quick-install-action@v28
       - name: Install kcov
-        run: sudo apt-get update && sudo apt-get install -y kcov
-      # The project's rule is 100% of lines, and it used to be enforced only on
-      # the machine of whoever remembered to run it.
+        run: nix profile install nixpkgs#kcov
       - name: Coverage
         run: zig build coverage -Dkcov="$(command -v kcov)"
