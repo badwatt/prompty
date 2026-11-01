@@ -20,7 +20,7 @@ same directory, default configuration of each prompt:
 | this repository, `git status` on | **4.3 ms**  | 13.73 ms        |
 | this repository, `--git=false`   | **0.95 ms** | —               |
 | a directory with 20,000 entries  | **0.92 ms** | 87.6 ms         |
-| binary size                      | **68 KiB**  | 13.4 MiB        |
+| binary size                      | **67 KiB**  | 13.4 MiB        |
 
 The difference is what each prompt _looks at_. prompty reads `.git/HEAD`, runs
 one `git status` when you are in a repository, and reads the clock. It never
@@ -194,7 +194,7 @@ with `…`, never written past its buffer.
 ## Development
 
 ```sh
-zig build             # 68 KiB static binary, ReleaseFast
+zig build             # 67 KiB static binary, ReleaseFast
 zig build -Dmode=safe # the same code with the safety checks on, for auditing
 zig build test        # 228 unit, integration and property tests
 zig build coverage    # the same tests under kcov, gate at 100% of lines

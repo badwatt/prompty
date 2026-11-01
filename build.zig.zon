@@ -3,7 +3,7 @@
     // build.zig turns these into the `build_options` module, so no other file
     // is allowed to spell either of them out.
     .name = .prompty,
-    .version = "0.4.2",
+    .version = "0.5.0",
     .fingerprint = 0xd3bb71e7cc991f5a, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},
