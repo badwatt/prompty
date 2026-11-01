@@ -217,17 +217,23 @@ test "a command that never answers is killed" {
     var runner = testRunner(null);
     runner.timeout_ms = 20;
     var output: [256]u8 = undefined;
+    // A shell busy loop: no external program needed, so this behaves the same
+    // in a build sandbox as on a desktop.
     try std.testing.expectEqual(
         @as(?[]const u8, null),
-        runner.command().run(&.{ "/bin/sh", "-c", "sleep 5" }, &output),
+        runner.command().run(&.{ "/bin/sh", "-c", "while :; do :; done" }, &output),
     );
 }
 
-test "output larger than the buffer is truncated, not hung on" {
+test "an endless writer cannot fill the prompt or hang it" {
     var runner = testRunner(null);
     var output: [8]u8 = undefined;
-    // The writer blocks once the pipe fills; closing the read end unblocks it.
-    const result = runner.command().run(&.{ "/bin/sh", "-c", "yes 0123456789" }, &output);
+    // The writer blocks once the pipe fills; closing the read end unblocks it,
+    // and a truncated read is a failure because it cannot be parsed.
+    const result = runner.command().run(
+        &.{ "/bin/sh", "-c", "while :; do printf 0123456789; done" },
+        &output,
+    );
     try std.testing.expectEqual(@as(?[]const u8, null), result);
 }
 

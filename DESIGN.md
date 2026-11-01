@@ -13,8 +13,9 @@ The budget, in order of what actually costs:
 1. **Process startup.** A 70 KiB static binary, no libc, no allocator, no
    dynamic linking. The 12 MiB debug build costs 0.4 ms more per prompt purely
    in page faults, which is why `zig build` defaults to ReleaseFast and strips.
-2. **Subprocesses.** `node --version` is 30-60 ms on a cold cache, and starship
-   spawns one per language per prompt. prompty spawns exactly one process, and
+2. **Subprocesses.** `node --version` is 30-60 ms on a cold cache, and running
+   one per language per prompt is the usual way to lose a prompt. prompty
+   spawns exactly one process, and
    only inside a repository: `git status --porcelain=v2 --branch`, at about
    4 ms, which is why the repository case is 5 ms and the rest is 0.7 ms.
 3. **Syscalls.** 35 on the happy path: one `getdents64` per project root, a
@@ -38,7 +39,7 @@ The budget, in order of what actually costs:
                            │
    ┌───────────────────────▼───────────────────────┐
    │                   ports                       │
-   │  Files  Environ  Clock  Commands  Terminal  Output │
+   │ Files  Environ  Clock  Commands  Terminal  Output │
    └───────────────────────┬───────────────────────┘
                            │
    ┌───────────────────────▼───────────────────────┐
@@ -71,8 +72,7 @@ claims checkable rather than aspirational.
 - **Bounded loops.** The git walk is capped at 64 levels and asserts its bound;
   a directory scan is bounded by the kernel's `getdents64` buffer; path
   shortening keeps at most eight display components; `~` occupies one of them
-  and, inside a repository, the label is anchored on the repository name,
-  exactly as starship's `truncation_length` and `truncate_to_repo` do.
+  and, inside a repository, the label is anchored on the repository name.
 - **One line, one write.** `prompt.render` returns a slice of one buffer, and
   the CLI hands it to one `write`.
 - **Degrade, never fail.** A missing zone file means UTC, a silent terminal
@@ -124,6 +124,18 @@ shell:
 
 `NO_COLOR` removes the escapes entirely rather than rendering in grey, so the
 output is byte-for-byte plain text.
+
+## Packaging
+
+`build.zig.zon` stays the only place the name and the version are written. The
+Nix derivation cannot parse Zig, so `nix/manifest.nix` extracts those two values
+from the manifest with a regex over its lines; the flake then exposes the
+package, the module and a check that builds and tests the package in a sandbox.
+
+The home-manager module owns exactly three things: the package, the two lines
+that wire the prompt into zsh and bash, and the session variables behind the two
+documented options. It does not touch any other shell configuration, which is
+what makes `programs.prompty.enable = true;` sufficient.
 
 ## Testing
 

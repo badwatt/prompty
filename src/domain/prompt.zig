@@ -73,7 +73,7 @@ const bold_off = "\x1b[22m";
 /// The branch glyph from the terminal setup prompty was built for.
 const branch_glyph = "\u{f113}";
 
-// Symbol for each status category, matching the prompt this replaces.
+// Symbol for each status category, one glyph each and no counts.
 const conflicted_glyph = "=";
 const stashed_glyph = "$";
 const deleted_glyph = "\u{2718}";
@@ -196,9 +196,8 @@ fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
 
 /// The dim detail after the pill: separated by two spaces, one colour change
 /// per item and nothing else.
-/// The status symbols, in the order the prompt being replaced shows them:
-/// conflicts first, then the worktree state, then how far the branch has
-/// drifted from its upstream.
+/// The status symbols: conflicts first, then the worktree state, then how far
+/// the branch has drifted from its upstream.
 fn writeStatus(canvas: *Canvas, status: git_status_mod.Status) void {
     if (status.conflicted > 0) canvas.text(conflicted_glyph);
     if (status.stashed > 0) canvas.text(stashed_glyph);
@@ -466,7 +465,7 @@ test "the branch carries its glyph and the status carries its symbols" {
             },
         },
     };
-    // The same shape the prompt this replaces prints for that state.
+    // One glyph per category, densely packed after the branch.
     try std.testing.expectEqualStrings(
         "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} main \u{2718}!+? \u{e0b0} \u{276f} ",
         renderToString(&dirty),

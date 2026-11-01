@@ -1,10 +1,10 @@
 //! Language detection that never spawns a toolchain.
 //!
-//! Starship runs `go version`, `node --version` and friends on every prompt,
-//! which costs tens of milliseconds each. prompty instead recognises a project
-//! by its manifest and reads the version from the file the project already
-//! carries (`.zigversion`, `.nvmrc`, `go.mod`, `rust-toolchain.toml`). When the
-//! project does not pin a version, only the icon is shown.
+//! Running `go version` or `node --version` costs tens of milliseconds each, on
+//! every prompt. prompty instead recognises a project by its manifest and reads
+//! the version from the file the project already carries (`.zigversion`,
+//! `.nvmrc`, `go.mod`, `rust-toolchain.toml`). When the project does not pin a
+//! version, only the icon is shown.
 
 const std = @import("std");
 

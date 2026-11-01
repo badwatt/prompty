@@ -1,8 +1,8 @@
 //! Turns an absolute working directory into the short label shown in the
 //! prompt.
 //!
-//! Two rules, and they have to agree with the prompt this replaces, because a
-//! path that reads differently after a swap is a daily annoyance:
+//! Two rules, chosen so that the label stays readable at any depth without a
+//! configuration knob:
 //!
 //! - Inside a repository, the label is the repository name plus the directories
 //!   below it, always prefixed with the truncation symbol, because the
@@ -11,6 +11,9 @@
 //! - Otherwise the label is the path relative to home (`~` counts as one of the
 //!   kept components), or the absolute path, and the last `keep` components are
 //!   kept. `~/a/b/c` reads `…/a/b/c`, `/usr/share/doc` is untouched.
+//!
+//! Both rules are exercised by a table of paths in the tests, including the
+//! boundaries where a component is or is not dropped.
 
 const std = @import("std");
 

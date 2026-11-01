@@ -1,49 +1,89 @@
 # prompty
 
-A terminal prompt obsessed with one number: the time between pressing Enter and
-seeing the next prompt.
+A terminal prompt that measures itself in microseconds.
 
 ```
-  badwatt   ~/Projects/code/prompty    main ✘!+?   zig 0.17.0   14:32   1.2s ❯
+  badwatt   …/prompty    main ✘!+?   zig 0.17.0   14:32   1.2s ❯
 ```
 
-One line. Three powerline surfaces that fade into your terminal's own
+One line: three powerline surfaces that fade into your terminal's own
 background, then dim detail, then the chevron. Zero configuration.
 
-| | median | p95 | binary |
-|---|---|---|---|
-| **prompty, no repository** | **0.7 ms** | 0.9 ms | 70 KiB |
-| **prompty, repository (git status on)** | **5.0 ms** | 6.4 ms | 70 KiB |
-| **prompty, `--no-git-status`** | **1.1 ms** | 1.4 ms | 70 KiB |
-| a prompt that shells out for everything | 10.56 ms | 11.63 ms | 12 MiB |
+## Performance
 
-Measured with `zig build bench` (300 forks, fork and exec included; see
-`tools/bench.zig`). The last row is the same measurement of `starship prompt` on
-this machine, in the same repository, with the same `git status` it also runs.
+Every number below is a full `fork` + `exec` + render, measured on the same
+machine with the same harness, 100-300 runs each, in the same directory, with
+the default configuration of each prompt:
 
-## Why it is fast
+| where | prompty | starship 1.25.1 |
+|---|---|---|
+| empty directory | **1.04 ms** | 3.08 ms |
+| a polyglot project (`package.json`, `go.mod`, `Cargo.toml`, `build.zig.zon`) | **1.05 ms** | 32.13 ms |
+| this repository (36 tracked files) | **4.82 ms** | 13.73 ms |
+| this repository, `--no-git-status` | **1.05 ms** | — |
+| binary size | **79 KiB** | 13.4 MiB |
 
-- **One subprocess in total**, and only inside a repository: a single
-  `git status --porcelain=v2 --branch` for the branch state, the change counts
-  and the upstream divergence. Everything else is file reads: the project type
-  from one `getdents64`, the versions from files the project already carries
-  (`.zigversion`, `go.mod`, `rust-toolchain.toml`, `.nvmrc`), the clock from
-  `CLOCK_REALTIME` plus the TZif file, the stash from `refs/stash`. No
-  `node --version`, no `go version`, no second fork.
-- **A way out of even that.** `--no-git-status` (or `PROMTY_GIT_STATUS=0`) drops
-  the git call and renders the branch from `.git/HEAD` alone, for 1.1 ms.
-- **No allocation.** Every buffer is a fixed-size stack array; the whole program
-  is a static binary with six syscalls on the happy path.
-- **No configuration.** The palette is derived from your terminal background in
-  Oklab, so the surfaces are subtle variations of the colour you already chose.
-  The background is detected once, over OSC 11, and cached.
-- **One write.** The prompt is assembled in one buffer and handed to the tty in
-  a single `write` syscall.
+The polyglot row is 30× because of what each prompt does when it sees a
+project: starship runs `node --version`, `go version`, `cargo --version` and
+so on, once per toolchain, on every single command. prompty reads the files the
+project already carries — `.nvmrc`, `go.mod`, `rust-toolchain.toml`,
+`.zigversion`, `build.zig.zon` — and shows nothing when the project does not pin
+a version.
 
-## Install
+Inside a repository the remaining cost is `git status`: prompty runs it once,
+4 ms, and that is the whole difference between the second-to-last row and the
+third. Reproduce all of it yourself:
 
 ```sh
-zig build -Drelease=true          # 70 KiB static binary in zig-out/bin
+zig build bench -- 300                 # prompty
+zig build bench -- 100 $(command -v starship) prompt   # whatever you have
+```
+
+`zig build bench` is in `tools/bench.zig`: it spawns the command N times,
+records wall clock per run and prints min / median / mean / p95 / max.
+
+## Install with Nix
+
+Add the flake and set one option. In your home-manager configuration:
+
+```nix
+# flake.nix
+inputs.prompty.url = "path:/path/to/prompty";   # or git+file:..., github:...
+inputs.prompty.inputs.nixpkgs.follows = "nixpkgs";   # reuse yours, fetch nothing
+
+# home-manager modules
+imports = [ inputs.prompty.homeModules.default ];
+
+programs.prompty.enable = true;
+```
+
+That is the entire setup: the package is installed, and the prompt is wired
+into every shell home-manager manages (zsh and bash), ordered after the rest of
+your initialisation and idempotent if it is sourced twice. You do not edit a
+shell file.
+
+Optional knobs:
+
+```nix
+programs.prompty = {
+  enable = true;
+  package = inputs.prompty.packages.${system}.default;  # the default
+  gitStatus = true;        # false: skip the git call, keep the branch
+  background = "#1e1e2e";  # else prompty asks the terminal once and caches it
+};
+```
+
+Without home-manager:
+
+```sh
+nix profile install .#prompty
+eval "$(prompty init zsh)"    # or: eval "$(prompty init bash)"
+```
+
+## Install without Nix
+
+```sh
+zig build                       # 79 KiB static binary in zig-out/bin
 install -m755 zig-out/bin/prompty ~/.local/bin/prompty
 ```
 
@@ -59,12 +99,26 @@ eval "$(prompty init zsh)"
 eval "$(prompty init bash)"
 ```
 
-That is the entire setup. The first interactive shell asks the terminal for its
-background colour, remembers it, and every prompt after that is a fork plus a
-few hundred microseconds.
+The first interactive shell asks the terminal for its background colour, derives
+the palette and caches it; every prompt after that is a fork and a few hundred
+microseconds. A Nerd Font is needed for the glyphs.
 
-You need a Nerd Font for the glyphs (the powerline separators, the language
-icons and the clock come from the same range).
+## Why it is fast
+
+- **One subprocess in total**, and only inside a repository: a single
+  `git status --porcelain=v2 --branch` for the branch, the change counts and the
+  upstream divergence. Everything else is file reads: the project type from one
+  `getdents64`, versions from files the project already has, the clock from
+  `CLOCK_REALTIME` plus the TZif file, the stash from `refs/stash`.
+- **No allocation.** Every buffer is a fixed-size stack array; the program is a
+  static binary that issues about 35 syscalls per prompt.
+- **No configuration file.** The palette is derived from the terminal background
+  in Oklab, so the surfaces are subtle variations of the colour you already
+  chose.
+- **One write.** The prompt is assembled in one buffer and handed to the tty in
+  a single `write` syscall.
+- **A way out of even the git call.** `--no-git-status` or
+  `PROMTY_GIT_STATUS=0` renders the branch from `.git/HEAD` alone, for 1.05 ms.
 
 ## Commands
 
@@ -80,10 +134,10 @@ prompty version                                        print name and version
 
 | segment | source | cost |
 |---|---|---|
-| user | `$USER`, coloured for root | — |
-| directory | `$PWD`, `~` for home, last three components where `~` counts as one | — |
-| branch | `git status --branch`, or `.git/HEAD` with `--no-git-status` | one process |
-| status | `$all_status`: `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, with no counts | (same call) |
+| user | `$USER`, bold, coloured for root | — |
+| directory | `$PWD`, `~` for home, anchored on the repository name | — |
+| branch | `git status --branch`, or `.git/HEAD` without the git call | one process |
+| status | `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, no counts | (same call) |
 | operation | `rebase-merge`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `BISECT_LOG` | 5 stat-only opens |
 | stash | `.git/refs/stash` or its reflog | 2 opens |
 | languages | one directory listing, then a version file per project | 1 read + 1 per language |
@@ -94,80 +148,76 @@ prompty version                                        print name and version
 
 ### Path truncation
 
-The same rules as starship with `truncation_length = 3`, verified side by side
-over eighteen paths:
+Three kept components, `~` counting as one, and the repository as the anchor:
 
 | working directory | label |
 |---|---|
 | `~/plain/a` | `~/plain/a` |
-| `~/plain/a/b` | `…/plain/a/b` (the `~` counts as a component) |
+| `~/plain/a/b` | `…/plain/a/b` |
 | `/usr/share/doc` | `/usr/share/doc` (the root slash does not count) |
 | `/usr/share/doc/x` | `…/share/doc/x` |
-| repo at `~/Projects/code/prompty`, cwd = repo root | `…/prompty` |
+| repository at `~/Projects/code/prompty`, cwd = repo root | `…/prompty` |
 | … cwd = `src/domain` | `…/prompty/src/domain` |
 | … cwd = `src/domain/deep/er` | `…/domain/deep/er` |
 
-Inside a repository the label is anchored on the repository name — that is
-starship's `truncate_to_repo`, which is on by default — so the ancestors above
-the repository are replaced by `…/`.
+Inside a repository the ancestors above it are replaced by `…/`, which is what
+makes the label stable no matter how deep the clone lives.
 
 ### Git
 
 The branch, the working tree state and the upstream divergence are exactly what
-`git status --porcelain=v2 --branch` reports, rendered with the same symbols and
-in the same order as the prompt this replaces: `=` conflict, `$` stash, `✘`
-deleted, `»` renamed, `!` modified, `+` staged, `?` untracked, then `⇕` diverged
-or `⇡`/`⇣`.
+`git status --porcelain=v2 --branch` reports, rendered with one glyph per
+category: `=` conflict, `$` stash, `✘` deleted, `»` renamed, `!` modified, `+`
+staged, `?` untracked, then `⇕` diverged or `⇡`/`⇣`.
 
-That is one process, and it is the only one prompty ever runs: it costs about
-4 ms, which is the bulk of the 5 ms repository figure above. Parsing the index
-directly instead would be faster but wrong (ignore rules, submodules, sparse
-checkouts), and being subtly wrong about git status is worse than being slow.
-When it is not worth 4 ms, turn it off:
-
-```sh
-PROMTY_GIT_STATUS=0        # or: prompty render --no-git-status
-```
+Parsing the index directly would be faster but wrong — ignore rules, submodules,
+sparse checkouts, `assume-unchanged` and ahead/behind all live in git's head,
+not in the index — and being subtly wrong about a dirty tree is worse than being
+slow. So it is one subprocess, and it can be switched off.
 
 ### What it deliberately does not do
 
-- **No version numbers from toolchains.** prompty shows what the project pins,
-  never what happens to be installed.
-- **No commit-graph walk beyond what git reports** for ahead/behind.
+- **No toolchain versions.** prompty shows what the project pins, never what
+  happens to be installed.
+- **No second subprocess.** There is no `node --version`, no `go version`, no
+  `git rev-parse` on top of the status call.
 
 ## Environment
 
 | variable | meaning |
 |---|---|
 | `PROMTY_BACKGROUND` | `#rrggbb`, overrides the detected terminal background |
-| `NO_COLOR` | set to anything to disable colour entirely |
 | `PROMTY_GIT_STATUS` | `0`/`false` to skip the `git status` call entirely |
+| `NO_COLOR` | set to anything to disable colour entirely |
 | `PROMTY_LAST_EXIT` | exit status of the previous command, set by the integration |
 | `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration |
 
 ## Development
 
 ```sh
-zig build test        # 142 unit and integration tests
-zig build coverage    # the same tests under kcov, gate at 100% lines
+zig build test        # 179 unit and integration tests
+zig build coverage    # the same tests under kcov, gate at 100% of lines
 zig build bench       # measure a real render, fork included
 zig build run -- render --no-color
+nix build .#          # the package, built and tested in a sandbox
 ```
 
 `zig build coverage` needs `kcov` (override its path with `-Dkcov=...`).
 
 ## Requirements
 
-Linux, Zig 0.17, and a terminal that answers OSC 11 (or `PROMTY_BACKGROUND`).
+Linux, Zig 0.17, and a terminal that answers the OSC 11 background query (or
+`PROMTY_BACKGROUND`).
 
 ## Layout
 
 ```
-src/domain/       pure: colours, path shortening, durations, TZif, rendering
-src/ports/        the four interfaces the outside world is reduced to
-src/adapters/     Linux syscalls behind those interfaces
+src/domain/       pure: colours, path shortening, durations, TZif, git porcelain, rendering
+src/ports/        the six interfaces the outside world is reduced to
+src/adapters/     Linux syscalls and one fork/exec behind those interfaces
 src/application/  the use case, the command line and the shell scripts
 src/main.zig      composition root: the only file that knows both sides
+nix/              package, manifest reader and the home-manager module
 tools/            coverage gate and benchmark
 ```
 

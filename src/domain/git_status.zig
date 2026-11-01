@@ -7,7 +7,7 @@
 
 const std = @import("std");
 
-/// The categories starship's `$all_status` shows, in its order.
+/// The categories the status row shows, in display order.
 pub const Status = struct {
     conflicted: u16 = 0,
     stashed: u16 = 0,
