@@ -19,6 +19,11 @@ pub const LocalClock = struct {
     /// be reached by a real zone and keeps the parse bounded.
     const zone_capacity = 16 * 1024;
 
+    /// Static for the same reason as the git status buffer: the prompt runs on
+    /// the shell's stack, and sixteen kilobytes of it for a file that is read
+    /// once per render is budget spent on nothing.
+    var zone_storage: [zone_capacity]u8 = undefined;
+
     pub fn clock(self: *const LocalClock) ports.Clock {
         return .{
             .ptr = @ptrCast(@constCast(self)),
@@ -39,8 +44,7 @@ pub const LocalClock = struct {
         var path_buffer: [4096]u8 = undefined;
         const zone_path = self.zonePath(&path_buffer) orelse return 0;
 
-        var zone: [zone_capacity]u8 = undefined;
-        const data = self.files.read(zone_path, &zone) orelse return 0;
+        const data = self.files.read(zone_path, &zone_storage) orelse return 0;
         return tzif.offsetAt(data, unix_seconds) orelse 0;
     }
 

@@ -65,7 +65,7 @@ pub const Runner = struct {
             _ = linux.close(read_end);
             _ = linux.dup2(write_end, posix.STDOUT_FILENO);
             _ = linux.close(write_end);
-            exec(self, argv[0], arguments);
+            divert(self, argv[0], arguments);
         }
 
         _ = linux.close(write_end);
@@ -118,6 +118,26 @@ pub const Runner = struct {
     fn childPid(forked: usize) ?linux.pid_t {
         if (linux.errno(forked) != .SUCCESS) return null;
         return @bitCast(@as(u32, @truncate(forked)));
+    }
+
+    /// Points the child's stdin and stderr at `/dev/null` and then becomes the
+    /// program.
+    ///
+    /// Both matter. A half-initialised `.git` makes git print "fatal: not a
+    /// repository" on stderr, which would land on top of the prompt line, and a
+    /// program on `PATH` that reads stdin would eat the user's typing.
+    fn divert(
+        self: *const Runner,
+        program: []const u8,
+        arguments: [*:null]const ?[*:0]const u8,
+    ) noreturn {
+        const dev_null = linux.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
+        if (linux.errno(dev_null) == .SUCCESS) {
+            _ = linux.dup2(@intCast(dev_null), posix.STDIN_FILENO);
+            _ = linux.dup2(@intCast(dev_null), posix.STDERR_FILENO);
+            _ = linux.close(@intCast(dev_null));
+        }
+        exec(self, program, arguments);
     }
 
     /// Replaces the child process. Every failure ends the child quietly: the
@@ -202,6 +222,20 @@ test "a failed fork is a failure, never a pid of minus one" {
     try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -1))));
     try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -12))));
     try std.testing.expectEqual(@as(?linux.pid_t, 4242), Runner.childPid(4242));
+}
+
+test "a child cannot talk over the prompt or read the keyboard" {
+    // A `.git` that git does not understand makes it print "fatal: ..." on
+    // stderr, and anything on PATH that reads stdin would take the user's
+    // typing. `-ef` compares device and inode, so this asks the child itself
+    // which file its standard input and error are.
+    var runner = testRunner(null);
+    var output: [64]u8 = undefined;
+    const result = runner.command().run(
+        &.{ "/bin/sh", "-c", "if [ /proc/self/fd/0 -ef /dev/null ] && [ /proc/self/fd/2 -ef /dev/null ]; then printf diverted; else printf inherited; fi" },
+        &output,
+    ).?;
+    try std.testing.expectEqualStrings("diverted", result);
 }
 
 test "a failed fork closes the pipe and signals nothing" {

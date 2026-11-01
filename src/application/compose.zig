@@ -155,12 +155,17 @@ fn withStatus(base: prompt.Git, report: git_status_mod.Report, store: *store_mod
     return git;
 }
 
+/// Enough for a few thousand changed files. Larger output cannot be parsed
+/// halfway, so the read fails cleanly and the prompt falls back to the branch,
+/// which is what a repository with fifteen thousand open changes deserves.
+///
+/// Static rather than on the stack: a prompt runs on the shell's own stack, and
+/// a quarter of a megabyte there is enough to make `ulimit -s 256` a segfault in
+/// the middle of someone's prompt. Nothing here is reentrant — the process
+/// renders one prompt and exits.
+var status_output: [256 * 1024]u8 = undefined;
+
 fn readStatus(host: ports.Host) ?git_status_mod.Report {
-    // Enough for a few thousand changed files. Larger output cannot be parsed
-    // halfway, so the read fails cleanly and the prompt falls back to the
-    // branch, which is what a repository with fifteen thousand open changes
-    // deserves anyway.
-    var output: [256 * 1024]u8 = undefined;
     const argv = [_][:0]const u8{
         "git",
         "--no-optional-locks",
@@ -170,7 +175,7 @@ fn readStatus(host: ports.Host) ?git_status_mod.Report {
         "--untracked-files=normal",
         "-z",
     };
-    const records = host.commands.run(&argv, &output) orelse return null;
+    const records = host.commands.run(&argv, &status_output) orelse return null;
     return git_status_mod.parse(records);
 }
 
