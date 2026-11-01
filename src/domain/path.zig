@@ -1,6 +1,11 @@
 //! Turns an absolute working directory into the short label shown in the
 //! prompt: `~` for the home directory, and only the last `keep` components when
 //! the path goes deeper than the prompt can afford.
+//!
+//! `keep` counts display components, and the `~` marker is one of them: three
+//! levels below home do not fit in three, because `~` already took a slot. That
+//! is the rule starship's `truncation_length` follows, and matching it means a
+//! prompt swap does not change how the path reads.
 
 const std = @import("std");
 
@@ -33,6 +38,8 @@ pub fn display(out: []u8, cwd: []const u8, home: []const u8, keep: u8) []const u
     }
 
     const rooted = rest.len > 0 and rest[0] == '/' and shortened_prefix.len == 0;
+    // `~` occupies a slot exactly like a directory name does.
+    const home_marker: usize = @intFromBool(shortened_prefix.len > 0);
 
     // Keep the last `keep` components: a path may be arbitrarily deep but the
     // prompt only ever shows a bounded tail.
@@ -58,7 +65,7 @@ pub fn display(out: []u8, cwd: []const u8, home: []const u8, keep: u8) []const u
     var written: usize = 0;
     for (tail[0..tail_length], 0..) |component, position| {
         if (position == 0) {
-            if (total > keep) {
+            if (total + home_marker > keep) {
                 written = append(out, written, "…/");
             } else if (shortened_prefix.len > 0) {
                 written = append(out, written, "~/");
@@ -100,6 +107,34 @@ test "paths under home keep the tilde" {
     try expectDisplay("~", "/home/dev/", 3);
     try expectDisplay("~/src", "/home/dev/src", 3);
     try expectDisplay("~/src/prompty", "/home/dev/src/prompty", 3);
+}
+
+test "the tilde counts as one of the kept components" {
+    // Three levels below home do not fit in three slots, because `~` takes one.
+    try expectDisplay("~/a/b", "/home/dev/a/b", 3);
+    try expectDisplay("…/a/b/c", "/home/dev/a/b/c", 3);
+    try expectDisplay("…/b/c/d", "/home/dev/a/b/c/d", 3);
+    // And with a single slot the marker is the first thing to go.
+    try expectDisplay("…/a", "/home/dev/a", 1);
+    try expectDisplay("~", "/home/dev", 1);
+}
+
+test "absolute paths count only their components" {
+    // The root slash is not a component, so three names still fit.
+    try expectDisplay("/usr/share/doc", "/usr/share/doc", 3);
+    try expectDisplay("…/share/doc/x", "/usr/share/doc/x", 3);
+}
+
+test "keep eight is enough for seven components under home" {
+    var buffer: [max_display_bytes]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "~/1/2/3/4/5/6/7",
+        display(&buffer, "/home/dev/1/2/3/4/5/6/7", "/home/dev", max_keep),
+    );
+    try std.testing.expectEqualStrings(
+        "…/1/2/3/4/5/6/7/8",
+        display(&buffer, "/home/dev/1/2/3/4/5/6/7/8", "/home/dev", max_keep),
+    );
 }
 
 test "deep paths keep only the last components" {

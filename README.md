@@ -74,7 +74,7 @@ prompty version                                        print name and version
 | segment | source | cost |
 |---|---|---|
 | user | `$USER`, coloured for root | — |
-| directory | `$PWD`, `~` for home, last three components | — |
+| directory | `$PWD`, `~` for home, last three components where `~` counts as one | — |
 | branch | `.git/HEAD`, `.git` gitfiles for worktrees, detached heads | ~4 reads |
 | operation | `rebase-merge`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `BISECT_LOG` | 5 stat-only opens |
 | languages | one directory listing, then a version file per project | 1 read + 1 per language |
@@ -82,6 +82,13 @@ prompty version                                        print name and version
 | exit status | `$PROMTY_LAST_EXIT` | — |
 | duration | `$PROMTY_LAST_DURATION_MS` | — |
 | clock | `CLOCK_REALTIME` + `/etc/localtime` | 1 read |
+
+### Path truncation
+
+The same rule as starship's `truncation_length = 3`: keep the last three display
+components, and `~` is one of them, so `~/a/b/c` becomes `…/a/b/c` while
+`~/a/b` stays as it is. Absolute paths count only their names, because the root
+slash is not a component: `/usr/share/doc` fits, `/usr/share/doc/x` does not.
 
 ### What it deliberately does not do
 
