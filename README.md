@@ -144,7 +144,7 @@ prompty version                                        print name and version
 | direnv      | `$DIRENV_DIFF`                                                 | —                       |
 | duration    | `$PROMTY_LAST_DURATION_MS`                                     | —                       |
 | clock       | `CLOCK_REALTIME` + `/etc/localtime`                            | 1 read                  |
-| exit status | `$PROMTY_LAST_EXIT`: a `✘` when the last command failed, last of all | —                  |
+| exit status | `$PROMTY_LAST_EXIT`: a red `×` when the last command failed, last of all | —                  |
 
 ### Robustness
 
@@ -162,6 +162,11 @@ fail:
   terminal state, turns echo and canonical input off, reads the whole reply so
   no byte is left in the input queue, restores the state on every path, and
   holds off `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT` while doing it.
+- **The shell hook fits in.** bash 5.1 made `PROMPT_COMMAND` an array; prompty
+  adds itself to whichever form it finds and never twice, so other hooks keep
+  running.
+- **The cache is written atomically.** Two terminals starting at once cannot
+  leave a reader looking at half a file.
 - **The one subprocess has a deadline.** A command that does not answer in two
   seconds is killed and the prompt falls back to reading `.git/HEAD`.
 

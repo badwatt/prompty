@@ -87,7 +87,9 @@ const behind_glyph = "\u{21e3}";
 
 const direnv_glyph = "\u{f0d6e}";
 const clock_glyph = "\u{f051a}";
-const failure_glyph = "\u{2718}";
+/// Deliberately not the `✘` that marks deleted files: one is about the tree,
+/// the other about the command, and they must not read the same.
+const failure_glyph = "\u{00d7}";
 
 pub fn render(model: *const Model, buffer: []u8) []const u8 {
     var canvas = Canvas.init(buffer, model.shell, model.color);
@@ -448,7 +450,7 @@ test "failure, direnv and several languages all appear" {
     const rendered = renderToString(&model);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{e6a9}  \u{f07d3} 1.22.3  \u{f10d3}") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{f0d6e}") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{2718}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{00d7}") != null);
     // The exit code itself is not printed: it would only distinguish failures
     // from each other, not add anything the prompt can act on.
     try std.testing.expect(std.mem.indexOf(u8, rendered, "130") == null);
@@ -540,7 +542,7 @@ test "the failure mark sits between the clock and the chevron" {
         .exit_code = 130,
     };
     try std.testing.expectEqualStrings(
-        "\n\u{e0b6} ~/repo \u{e0b0} 1.2s  \u{f051a} 12:04  \u{2718} \u{276f} ",
+        "\n\u{e0b6} ~/repo \u{e0b0} 1.2s  \u{f051a} 12:04  \u{00d7} \u{276f} ",
         renderToString(&model),
     );
 }

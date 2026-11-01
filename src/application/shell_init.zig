@@ -71,10 +71,20 @@ const bash_tail =
     " render --shell=bash)\"\n" ++
     "    PS1=${rendered:-\\$ }\n" ++
     "  }\n" ++
-    "  case ${PROMPT_COMMAND-} in\n" ++
-    "    *_prompty_precmd*) ;;\n" ++
-    "    \"\") PROMPT_COMMAND=\"_prompty_precmd\" ;;\n" ++
-    "    *) PROMPT_COMMAND=\"_prompty_precmd;$PROMPT_COMMAND\" ;;\n" ++
+    "  # PROMPT_COMMAND is a string in older bash and an array in bash 5.1+,\n" ++
+    "  # so the hook is added to whichever it is -- and never twice.\n" ++
+    "  case \"$(declare -p PROMPT_COMMAND 2>/dev/null)\" in\n" ++
+    "    \"declare -a\"*)\n" ++
+    "      [[ \" ${PROMPT_COMMAND[*]} \" == *\" _prompty_precmd \"* ]] ||\n" ++
+    "        PROMPT_COMMAND=(_prompty_precmd \"${PROMPT_COMMAND[@]}\")\n" ++
+    "      ;;\n" ++
+    "    *)\n" ++
+    "      case ${PROMPT_COMMAND-} in\n" ++
+    "        *_prompty_precmd*) ;;\n" ++
+    "        \"\") PROMPT_COMMAND=\"_prompty_precmd\" ;;\n" ++
+    "        *) PROMPT_COMMAND=\"_prompty_precmd;$PROMPT_COMMAND\" ;;\n" ++
+    "      esac\n" ++
+    "      ;;\n" ++
     "  esac\n" ++
     "fi\n";
 
@@ -101,6 +111,14 @@ test "the scripts are idempotent" {
     try std.testing.expect(std.mem.indexOf(u8, zsh_script, "-z $PROMPTY_LOADED") != null);
     try std.testing.expect(std.mem.indexOf(u8, bash_script, "-z $PROMPTY_LOADED") != null);
     try std.testing.expect(std.mem.indexOf(u8, bash_script, "*_prompty_precmd*") != null);
+}
+
+test "the bash hook survives a PROMPT_COMMAND array" {
+    // bash 5.1 made PROMPT_COMMAND an array; appending a string would throw the
+    // other hooks away.
+    try std.testing.expect(std.mem.indexOf(u8, bash_script, "declare -a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash_script, "PROMPT_COMMAND=(_prompty_precmd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bash_script, "PROMPT_COMMAND=\"_prompty_precmd\"") != null);
 }
 
 test "neither shell is left able to expand the prompt" {

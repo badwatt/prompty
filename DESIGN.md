@@ -81,6 +81,11 @@ claims checkable rather than aspirational.
 - **Untrusted text is sanitised at the boundary.** Control bytes are replaced
   when the text enters the store, and the shell integrations disable the second
   expansion pass, so a name is never interpreted as code.
+- **A shared file is replaced, not rewritten.** The cached background is
+  written to a sibling and renamed into place, because two shells starting at
+  the same moment are the normal case, not a race to design around.
+- **Two glyphs that mean different things do not look alike.** `✘` is a deleted
+  file in the worktree; a command that failed is `×`.
 - **One line, one write.** `prompt.render` returns a slice of one buffer, and
   the CLI hands it to one `write`.
 - **Degrade, never fail.** A missing zone file means UTC, a silent terminal

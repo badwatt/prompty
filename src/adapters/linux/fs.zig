@@ -38,6 +38,16 @@ pub const Fs = struct {
     fn writeFile(_: *anyopaque, path: []const u8, bytes: []const u8) bool {
         std.debug.assert(path.len > 0);
         makeParentDirectories(path);
+
+        // Write a sibling and rename it over the target: two shells starting at
+        // once must never leave a reader looking at half a file.
+        var temporary: [4096]u8 = undefined;
+        const temporary_path = std.fmt.bufPrint(&temporary, "{s}.tmp", .{path}) catch return false;
+        if (!writeDirect(temporary_path, bytes)) return false;
+        return rename(temporary_path, path);
+    }
+
+    fn writeDirect(path: []const u8, bytes: []const u8) bool {
         const options = linux.O{
             .ACCMODE = .WRONLY,
             .CREAT = true,
@@ -53,6 +63,19 @@ pub const Fs = struct {
             written += rc;
         }
         return true;
+    }
+
+    fn rename(from: []const u8, to: []const u8) bool {
+        var from_buffer: [4096]u8 = undefined;
+        var to_buffer: [4096]u8 = undefined;
+        if (from.len + 1 > from_buffer.len) return false;
+        if (to.len + 1 > to_buffer.len) return false;
+        @memcpy(from_buffer[0..from.len], from);
+        from_buffer[from.len] = 0;
+        @memcpy(to_buffer[0..to.len], to);
+        to_buffer[to.len] = 0;
+        const rc = linux.renameat(linux.AT.FDCWD, from_buffer[0..from.len :0], linux.AT.FDCWD, to_buffer[0..to.len :0]);
+        return linux.errno(rc) == .SUCCESS;
     }
 
     fn exists(_: *anyopaque, path: []const u8) bool {
