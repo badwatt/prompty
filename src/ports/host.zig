@@ -106,10 +106,18 @@ pub const Terminal = struct {
 
     pub const VTable = struct {
         background: *const fn (ptr: *anyopaque, buffer: []u8) ?[]const u8,
+        columns: *const fn (ptr: *anyopaque) ?u16,
     };
 
     pub fn background(self: Terminal, buffer: []u8) ?[]const u8 {
         return self.vtable.background(self.ptr, buffer);
+    }
+
+    /// How many columns the terminal has, or null when there is nobody there to
+    /// ask: a right-aligned segment needs the number and has no other way to
+    /// get it.
+    pub fn columns(self: Terminal) ?u16 {
+        return self.vtable.columns(self.ptr);
     }
 };
 

@@ -26,6 +26,9 @@ pub const Options = struct {
     /// Ask git for the working tree status. One process, once per prompt, only
     /// inside a repository. Turn it off for the absolute fastest path.
     git_status: bool = true,
+    /// Show the last command's duration against the right edge of the terminal
+    /// instead of dimmed after the pill.
+    duration_right: bool = false,
 };
 
 /// The most directory levels prompty will walk looking for a repository. A
@@ -79,6 +82,10 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     const unix_seconds = host.clock.now();
     model.time = clock_mod.fromUnix(unix_seconds, host.clock.offsetAt(unix_seconds));
     model.duration_ms = parseDuration(host);
+    if (options.duration_right) {
+        model.duration_placement = .right;
+        model.columns = columns(host);
+    }
     model.exit_code = parseExitCode(host);
     model.direnv = direnvActive(host);
     return model;
@@ -236,6 +243,19 @@ fn parseDuration(host: ports.Host) ?u64 {
     if (milliseconds == 0) return null;
     if (milliseconds > max_duration_ms) return null;
     return milliseconds;
+}
+
+/// The terminal width, from the shell first: the integration passes `$COLUMNS`
+/// on the same command line because a prompt's stdout is a pipe and cannot be
+/// asked. A terminal that does not answer and a shell that does not export the
+/// variable both mean "no width", never a guessed one.
+fn columns(host: ports.Host) ?u16 {
+    if (host.environ.get("COLUMNS")) |value| {
+        const trimmed = std.mem.trim(u8, value, " \t");
+        const parsed = std.fmt.parseInt(u16, trimmed, 10) catch 0;
+        if (parsed > 0) return parsed;
+    }
+    return host.terminal.columns();
 }
 
 fn parseExitCode(host: ports.Host) ?u8 {
@@ -452,6 +472,45 @@ test "collects every fact from a fake project" {
     try std.testing.expectEqualStrings("…/proj", model.path);
     try std.testing.expectEqualStrings("main", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
+}
+
+test "the right-placement option brings the width with it" {
+    // The shell passes COLUMNS because the prompt's own stdout is a pipe; the
+    // terminal is only asked when the shell did not say.
+    var from_shell = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        .{ "COLUMNS", "120" },
+        .{ "PROMTY_LAST_DURATION_MS", "1234" },
+    }));
+    const model = from_shell.model(.{ .duration_right = true });
+    try std.testing.expectEqual(prompt.DurationPlacement.right, model.duration_placement);
+    try std.testing.expectEqual(@as(?u16, 120), model.columns);
+    try std.testing.expectEqual(@as(?u64, 1_234), model.duration_ms);
+
+    // Without COLUMNS the terminal is asked, and a terminal that does not know
+    // leaves the prompt with no width rather than a guess.
+    var from_terminal = FakeHarness.init(&default_environment);
+    from_terminal.host.terminal = .{ .width = 90 };
+    try std.testing.expectEqual(@as(?u16, 90), from_terminal.model(.{ .duration_right = true }).columns);
+
+    var from_nowhere = FakeHarness.init(&default_environment);
+    try std.testing.expectEqual(@as(?u16, null), from_nowhere.model(.{ .duration_right = true }).columns);
+
+    // Nonsense in COLUMNS is not a width.
+    var nonsense = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        .{ "COLUMNS", "wide" },
+    }));
+    nonsense.host.terminal = .{ .width = 77 };
+    try std.testing.expectEqual(@as(?u16, 77), nonsense.model(.{ .duration_right = true }).columns);
+}
+
+test "without the option the duration stays on the line" {
+    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        .{ "PROMTY_LAST_DURATION_MS", "1234" },
+        .{ "COLUMNS", "120" },
+    }));
+    const model = harness.model(.{});
+    try std.testing.expectEqual(prompt.DurationPlacement.line, model.duration_placement);
+    try std.testing.expectEqual(@as(?u16, null), model.columns);
 }
 
 test "an absurdly long user name cannot take over the line" {

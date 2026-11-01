@@ -142,6 +142,38 @@ claims checkable rather than aspirational.
   means the default palette, an unreadable status means only the branch. There is no
   path in which a prompt fails to appear.
 
+## The right-aligned duration
+
+The one segment that is not part of the line is the last command's duration, and
+it is opt-in (`--duration-right`) because it needs a number the prompt does not
+otherwise have: the terminal's width.
+
+Three ways to get it, in order of cost: `$COLUMNS` from the environment (free,
+but a shell does not export it — the generated integration passes `COLUMNS=$COLUMNS`
+on the command line), `TIOCGWINSZ` on `/dev/tty` (two syscalls, and the only
+option that works with no cooperation from the shell), and nothing (never a
+guessed 80: an alignment to the wrong column is worse than no alignment).
+
+Knowing the width is the easy half. The hard half is knowing how much of the
+line is already used, which is not the byte count: a Powerline separator is three
+bytes and one column, and a directory called `日本語` is six columns in nine
+bytes. `domain/width.zig` is the part of `wcwidth` a prompt needs — wide ranges,
+combining marks, control characters — and `Canvas` counts columns as it writes,
+ignoring the escape sequences it emits for itself.
+
+Two consequences worth stating: a line already wider than the terminal gets no
+padding (wrapping a prompt corrupts the redraw, and the number is not worth it),
+and the segment is bold but not coloured by severity — the yellow is the point,
+and the escalation logic already lives in the dimmed placement.
+
+Timing is the shell's half, and it had to be fixed to make any of this visible:
+zsh computes the difference in floating point, so it was passing
+`150.00009536743164` and the prompt, which parses an integer, showed nothing —
+the dimmed duration had never appeared either. bash has no `preexec`, only a
+`DEBUG` trap, which is generated only for this option; and its `EPOCHREALTIME`
+is locale-formatted, so a Spanish shell hands out `1793542627,390303` and the
+separator has to be dropped before the subtraction.
+
 ## The palette
 
 The only input is the terminal background. Everything else is derived in Oklab

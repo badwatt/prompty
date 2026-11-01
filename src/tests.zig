@@ -22,6 +22,7 @@ test {
     _ = @import("domain/rgb.zig");
     _ = @import("domain/store.zig");
     _ = @import("domain/theme.zig");
+    _ = @import("domain/width.zig");
 
     _ = @import("ports/host.zig");
 

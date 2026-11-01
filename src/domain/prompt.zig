@@ -15,6 +15,7 @@ const duration_mod = @import("duration.zig");
 const git_mod = @import("git.zig");
 const git_status_mod = @import("git_status.zig");
 const theme_mod = @import("theme.zig");
+const width_mod = @import("width.zig");
 
 const Canvas = canvas_mod.Canvas;
 const Rgb = theme_mod.Rgb;
@@ -33,6 +34,15 @@ pub const Git = struct {
 /// path, the branch and the clock off the line.
 pub const max_user_bytes = 64;
 
+/// Where the last command's duration is shown.
+pub const DurationPlacement = enum {
+    /// Dimmed, after the pill, as part of the line.
+    line,
+    /// Bold, in milliseconds, against the right edge of the terminal: the one
+    /// thing a prompt puts there, out of the way of the line itself.
+    right,
+};
+
 pub const Model = struct {
     theme: theme_mod.Theme,
     shell: Shell = .plain,
@@ -43,6 +53,10 @@ pub const Model = struct {
     git: ?Git = null,
     time: ?clock_mod.TimeOfDay = null,
     duration_ms: ?u64 = null,
+    duration_placement: DurationPlacement = .line,
+    /// Terminal width in columns, when the shell or the terminal can tell us.
+    /// Without it `right` has nothing to align to and falls back to one space.
+    columns: ?u16 = null,
     exit_code: ?u8 = null,
     direnv: bool = false,
 };
@@ -140,10 +154,12 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         extras.begin(model.theme.green);
         extras.text(direnv_glyph);
     }
-    if (model.duration_ms) |milliseconds| {
-        extras.begin(durationColor(&model.theme, milliseconds));
-        var human: [duration_mod.max_length]u8 = undefined;
-        extras.text(duration_mod.format(&human, milliseconds));
+    if (model.duration_placement == .line) {
+        if (model.duration_ms) |milliseconds| {
+            extras.begin(durationColor(&model.theme, milliseconds));
+            var human: [duration_mod.max_length]u8 = undefined;
+            extras.text(duration_mod.format(&human, milliseconds));
+        }
     }
     if (model.time) |now| {
         extras.begin(model.theme.muted);
@@ -167,8 +183,37 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     canvas.escape(bold_on);
     canvas.text(" " ++ powerline.chevron ++ " ");
     reset(&canvas);
+
+    if (model.duration_placement == .right) {
+        if (model.duration_ms) |milliseconds| {
+            var digits: [duration_mod.max_length]u8 = undefined;
+            const label = std.fmt.bufPrint(&digits, "{d}ms", .{milliseconds}) catch unreachable;
+            canvas.text(rightPadding(model.columns, canvas.columns, width_mod.utf8(label)));
+            paint(&canvas, model.theme.yellow, null);
+            canvas.escape(bold_on);
+            canvas.text(label);
+            canvas.escape(bold_off);
+            reset(&canvas);
+        }
+    }
     return canvas.bytes();
 }
+
+/// The spaces needed to end the line at the right edge. One when there is no
+/// width to align to or no room left: the number is never worth a wrapped line,
+/// but it is also never worth hiding.
+fn rightPadding(columns: ?u16, used: usize, label_width: usize) []const u8 {
+    // Without a width there is nothing to align to; the space after the chevron
+    // is already there, so the number follows it directly.
+    const total: usize = columns orelse return spaces[0..0];
+    const needed = used + label_width;
+    if (needed >= total) return spaces[0..0];
+    return spaces[0 .. total - needed];
+}
+
+/// Wide enough for any terminal a prompt will meet; the slice handed out is
+/// never longer than the padding computed above.
+const spaces: [512]u8 = @splat(' ');
 
 fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
     if (milliseconds >= 10_000) return theme.red;
@@ -606,4 +651,94 @@ test "the buffer bound is never exceeded by a maximal prompt" {
         std.mem.count(u8, rendered, "%{"),
         std.mem.count(u8, rendered, "%}"),
     );
+}
+
+test "the right-aligned duration ends at the right edge in bold milliseconds" {
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/p",
+        .time = .{ .hour = 12, .minute = 4 },
+        .duration_ms = 1_234,
+        .duration_placement = .right,
+        .columns = 40,
+    };
+    const rendered = renderToString(&model);
+
+    // The line, then the padding, then the number: 40 columns exactly.
+    const line = rendered[1..]; // skip the leading newline
+    try std.testing.expectEqual(@as(usize, 40), width_mod.utf8(line));
+    try std.testing.expect(std.mem.endsWith(u8, line, "1234ms"));
+    // Milliseconds, not the human form, and not twice.
+    try std.testing.expect(std.mem.indexOf(u8, line, "1.2s") == null);
+
+    // Bold yellow, and only for the number.
+    const with_color = Model{
+        .theme = model.theme,
+        .path = "~/p",
+        .time = model.time,
+        .duration_ms = 1_234,
+        .duration_placement = .right,
+        .columns = 40,
+    };
+    const colored = renderToString(&with_color);
+    var expected: [96]u8 = undefined;
+    const sequence = std.fmt.bufPrint(&expected, "\x1b[38;2;{d};{d};{d}m\x1b[1m1234ms", .{
+        with_color.theme.yellow.r,
+        with_color.theme.yellow.g,
+        with_color.theme.yellow.b,
+    }) catch unreachable;
+    try std.testing.expect(std.mem.indexOf(u8, colored, sequence) != null);
+}
+
+test "without a width the duration still shows, one space after the chevron" {
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/p",
+        .duration_ms = 7,
+        .duration_placement = .right,
+    };
+    try std.testing.expectEqualStrings(
+        "\n\u{e0b6} ~/p \u{e0b0} \u{276f} 7ms",
+        renderToString(&model),
+    );
+}
+
+test "a prompt that does not fit leaves one space rather than wrapping" {
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/a-very-long-path-name",
+        .duration_ms = 1,
+        .duration_placement = .right,
+        .columns = 10,
+    };
+    const rendered = renderToString(&model);
+    try std.testing.expect(std.mem.endsWith(u8, rendered, "\u{276f} 1ms"));
+    try std.testing.expect(width_mod.utf8(rendered[1..]) > 10);
+}
+
+test "the inline placement never pads and the right one never doubles" {
+    const theme = fixtureTheme();
+    const dimmed = Model{
+        .theme = theme,
+        .color = false,
+        .path = "~/p",
+        .duration_ms = 1_234,
+        .columns = 40,
+    };
+    try std.testing.expect(std.mem.endsWith(u8, renderToString(&dimmed), "\u{276f} "));
+
+    // A right-placed duration replaces the dimmed one instead of repeating it:
+    // the human form is not in the output at all.
+    const right = Model{
+        .theme = theme,
+        .color = false,
+        .path = "~/p",
+        .duration_ms = 1_234,
+        .duration_placement = .right,
+        .columns = 40,
+    };
+    try std.testing.expect(std.mem.indexOf(u8, renderToString(&right), "1.2s") == null);
 }

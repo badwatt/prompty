@@ -16,6 +16,7 @@ pub const RenderOptions = struct {
     shell: canvas.Shell = .plain,
     color: bool = true,
     git_status: bool = true,
+    duration_right: bool = false,
 };
 
 pub const ThemeOptions = struct {
@@ -23,9 +24,14 @@ pub const ThemeOptions = struct {
     force: bool = false,
 };
 
+pub const InitOptions = struct {
+    shell: canvas.Shell,
+    duration_right: bool = false,
+};
+
 pub const Action = union(enum) {
     render: RenderOptions,
-    init: canvas.Shell,
+    init: InitOptions,
     version,
     theme: ThemeOptions,
     help,
@@ -62,6 +68,10 @@ fn parseRender(flags: []const []const u8) Action {
             options.git_status = false;
             continue;
         }
+        if (std.mem.eql(u8, flag, "--duration-right")) {
+            options.duration_right = true;
+            continue;
+        }
         const prefix = "--shell=";
         if (std.mem.startsWith(u8, flag, prefix)) {
             options.shell = canvas.Shell.parse(flag[prefix.len..]) orelse
@@ -88,10 +98,18 @@ fn parseTheme(arguments: []const []const u8) Action {
 }
 
 fn parseInit(arguments: []const []const u8) Action {
-    if (arguments.len != 1) return .{ .invalid = if (arguments.len == 0) "init" else arguments[1] };
+    if (arguments.len == 0) return .{ .invalid = "init" };
     const shell = canvas.Shell.parse(arguments[0]) orelse return .{ .invalid = arguments[0] };
     if (shell == .plain) return .{ .invalid = arguments[0] };
-    return .{ .init = shell };
+    var options = InitOptions{ .shell = shell };
+    for (arguments[1..]) |flag| {
+        if (std.mem.eql(u8, flag, "--duration-right")) {
+            options.duration_right = true;
+            continue;
+        }
+        return .{ .invalid = flag };
+    }
+    return .{ .init = options };
 }
 
 pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
@@ -102,12 +120,13 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
                 .shell = options.shell,
                 .color = options.color,
                 .git_status = options.git_status,
+                .duration_right = options.duration_right,
             });
             host.stdout.write(prompt.render(&model, &buffer));
             return exit_ok;
         },
-        .init => |shell| {
-            host.stdout.write(shell_init.script(shell));
+        .init => |init| {
+            host.stdout.write(shell_init.script(init.shell, init.duration_right));
             return exit_ok;
         },
         .version => {
@@ -143,8 +162,8 @@ const usage =
     "usage: " ++ metadata.name ++ " <command>\n" ++
     "\n" ++
     "  render [--shell=zsh|bash|plain] [--no-color]   print the prompt\n" ++
-    "         [--no-git-status]                        skip the git status call\n" ++
-    "  init zsh|bash                                  print the shell integration\n" ++
+    "         [--no-git-status] [--duration-right]     skip git / right-align the time\n" ++
+    "  init zsh|bash [--duration-right]               print the shell integration\n" ++
     "  theme [detect [--force]]                       print (or redetect) the palette\n" ++
     "  version                                        print name and version\n" ++
     "\n" ++
@@ -235,9 +254,24 @@ test "render rejects unknown flags and shells" {
     try expectParse(.{ .invalid = "extra" }, &.{ "prompty", "render", "--no-color", "extra" });
 }
 
+test "init takes the duration option after the shell" {
+    try expectParse(
+        .{ .init = .{ .shell = .zsh, .duration_right = true } },
+        &.{ "prompty", "init", "zsh", "--duration-right" },
+    );
+    try expectParse(.{ .invalid = "--wat" }, &.{ "prompty", "init", "zsh", "--wat" });
+}
+
+test "render takes the right-aligned duration" {
+    try expectParse(
+        .{ .render = .{ .duration_right = true } },
+        &.{ "prompty", "render", "--duration-right" },
+    );
+}
+
 test "init requires exactly one supported shell" {
-    try expectParse(.{ .init = .zsh }, &.{ "prompty", "init", "zsh" });
-    try expectParse(.{ .init = .bash }, &.{ "prompty", "init", "bash" });
+    try expectParse(.{ .init = .{ .shell = .zsh } }, &.{ "prompty", "init", "zsh" });
+    try expectParse(.{ .init = .{ .shell = .bash } }, &.{ "prompty", "init", "bash" });
     try expectParse(.{ .invalid = "init" }, &.{ "prompty", "init" });
     try expectParse(.{ .invalid = "fish" }, &.{ "prompty", "init", "fish" });
     try expectParse(.{ .invalid = "plain" }, &.{ "prompty", "init", "plain" });

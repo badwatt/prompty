@@ -203,12 +203,18 @@ pub const FakeCommand = struct {
 
 pub const FakeTerminal = struct {
     response: ?[]const u8 = null,
+    width: ?u16 = null,
 
     pub fn terminal(self: *FakeTerminal) ports.Terminal {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
-    const vtable = ports.Terminal.VTable{ .background = background };
+    const vtable = ports.Terminal.VTable{ .background = background, .columns = columns };
+
+    fn columns(ptr: *anyopaque) ?u16 {
+        const self: *FakeTerminal = @ptrCast(@alignCast(ptr));
+        return self.width;
+    }
 
     fn background(ptr: *anyopaque, buffer: []u8) ?[]const u8 {
         const self: *FakeTerminal = @ptrCast(@alignCast(ptr));

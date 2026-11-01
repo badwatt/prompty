@@ -35,6 +35,17 @@ in
       '';
     };
 
+    durationRight = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Show the last command's duration in bold milliseconds against the right
+        edge of the terminal, instead of dimmed after the prompt. The shell has
+        to pass the terminal width with it, so the option is also baked into the
+        generated integration.
+      '';
+    };
+
     background = lib.mkOption {
       type = lib.types.nullOr (lib.types.strMatching "#[0-9a-fA-F]{6}");
       default = null;
@@ -52,11 +63,11 @@ in
     # Ordered after the rest of the user's initialisation, and idempotent: the
     # generated script refuses to install itself twice.
     programs.zsh.initContent = lib.mkOrder 1200 ''
-      eval "$(${command} init zsh)"
+      eval "$(${command} init zsh${lib.optionalString cfg.durationRight " --duration-right"})"
     '';
 
     programs.bash.initExtra = ''
-      eval "$(${command} init bash)"
+      eval "$(${command} init bash${lib.optionalString cfg.durationRight " --duration-right"})"
     '';
 
     home.sessionVariables = lib.mkMerge [

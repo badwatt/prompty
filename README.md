@@ -59,8 +59,9 @@ and idempotent if sourced twice. No shell file to edit.
 ```nix
 programs.prompty = {
   enable = true;
-  gitStatus = true;        # false: skip the git call, keep the branch
-  background = "#1e1e2e";  # else prompty asks the terminal once and caches it
+  gitStatus = true;         # false: skip the git call, keep the branch
+  durationRight = false;    # true: last command's time, right edge, bold ms
+  background = "#1e1e2e";   # else prompty asks the terminal once and caches it
 };
 ```
 
@@ -85,7 +86,8 @@ microseconds. A Nerd Font is needed for the glyphs.
 ```
 prompty render [--shell=zsh|bash|plain] [--no-color]   print the prompt
                [--no-git-status]                       skip the git call
-prompty init zsh|bash                                  print the shell integration
+               [--duration-right]                      time at the right edge
+prompty init zsh|bash [--duration-right]               print the shell integration
 prompty theme [detect [--force]]                       print (or redetect) the palette
 prompty version                                        print name and version
 ```
@@ -102,8 +104,31 @@ finally a mark if that command failed.
 | directory | `$PWD`, `~` for home, three components, anchored on the repository name |
 | branch | `git status --branch`, or `.git/HEAD` with `--no-git-status` |
 | working tree | `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, one glyph per category and no counts; a rebase, merge, cherry-pick or bisect in progress; a stashed change |
-| detail | `$DIRENV_DIFF`; how long the last command took (`$PROMTY_LAST_DURATION_MS`, yellow past 2 s, red past 10 s); the clock |
+| detail | `$DIRENV_DIFF`; how long the last command took (`$PROMTY_LAST_DURATION_MS`, dimmed, yellow past 2 s, red past 10 s); the clock |
 | last command | a red `×` when it failed (`$PROMTY_LAST_EXIT`) |
+
+### The last command's duration, against the right edge
+
+`--duration-right` (or `programs.prompty.durationRight`) moves the duration out
+of the line and puts it where a prompt has room to spare: bold yellow, in plain
+milliseconds, ending at the last column of the terminal.
+
+```
+ badwatt  …/prompty  main !  14:32 ❯                                   1234ms
+```
+
+It replaces the dimmed `1.2s`, so the number is never shown twice. The width
+comes from `$COLUMNS`, which the generated integration passes on the command
+line — a prompt's stdout is a pipe and cannot be asked. A terminal that does not
+report its width and a shell that does not export the variable mean no padding
+rather than a guessed one, and a prompt already wider than the terminal is left
+alone rather than wrapped.
+
+Timing the command is the shell's job, and the two do it differently: zsh has a
+`preexec` hook, bash has only a `DEBUG` trap, so the bash trap is generated only
+when this option is on — the default bash integration still costs nothing per
+command. Both end up passing `PROMTY_LAST_DURATION_MS` in whole milliseconds,
+which is also what makes the dimmed placement work.
 
 ### Path truncation
 
@@ -152,13 +177,14 @@ with `…`, never written past its buffer.
 | `NO_COLOR` | set to anything to disable colour entirely |
 | `PROMTY_LAST_EXIT` | exit status of the previous command, set by the integration |
 | `PROMTY_LAST_DURATION_MS` | duration of the previous command, set by the integration |
+| `COLUMNS` | terminal width, passed by the integration for `--duration-right` |
 
 ## Development
 
 ```sh
 zig build             # 60 KiB static binary, ReleaseFast
 zig build -Dmode=safe # the same code with the safety checks on, for auditing
-zig build test        # 207 unit, integration and property tests
+zig build test        # 225 unit, integration and property tests
 zig build coverage    # the same tests under kcov, gate at 100% of lines
 zig build smoke       # every command, in the shipping ReleaseFast build
 zig build stack       # a render on a 64 KiB stack

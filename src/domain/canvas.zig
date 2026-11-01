@@ -8,6 +8,8 @@
 
 const std = @import("std");
 
+const width_mod = @import("width.zig");
+
 pub const Shell = enum {
     plain,
     zsh,
@@ -48,12 +50,16 @@ pub const Canvas = struct {
 
     buffer: []u8,
     len: usize,
+    /// Columns the visible text occupies, which is not `len`: the escape
+    /// sequences take none and a Nerd Font glyph takes one for four bytes. A
+    /// right-aligned segment needs this number.
+    columns: usize,
     shell: Shell,
     color: bool,
 
     pub fn init(buffer: []u8, shell: Shell, color: bool) Canvas {
         std.debug.assert(buffer.len <= capacity);
-        return .{ .buffer = buffer, .len = 0, .shell = shell, .color = color };
+        return .{ .buffer = buffer, .len = 0, .columns = 0, .shell = shell, .color = color };
     }
 
     pub fn bytes(self: *const Canvas) []const u8 {
@@ -63,6 +69,7 @@ pub const Canvas = struct {
     /// Appends literal text, quoting any character the target shell would
     /// otherwise interpolate.
     pub fn text(self: *Canvas, content: []const u8) void {
+        self.columns += width_mod.utf8(content);
         switch (self.shell) {
             .plain => self.raw(content),
             .zsh => self.textQuoting(content, '%'),
@@ -208,4 +215,27 @@ test "property: no text, quoted or not, escapes the buffer" {
             try std.testing.expect(canvas.len <= buffer.len);
         }
     }
+}
+
+test "visible columns are counted, escape sequences are not" {
+    var buffer: [128]u8 = undefined;
+    var canvas = Canvas.init(&buffer, .plain, true);
+    canvas.text("ab");
+    canvas.escapeFmt("\x1b[38;2;{d};{d};{d}m", .{ 1, 2, 3 });
+    canvas.text("\u{e0b0}"); // a powerline separator: one column, three bytes
+    canvas.text("日本語"); // six columns, nine bytes
+    canvas.escape("\x1b[0m");
+    try std.testing.expectEqual(@as(usize, 2 + 1 + 6), canvas.columns);
+    try std.testing.expect(canvas.bytes().len > canvas.columns);
+}
+
+test "quoting does not change the visible width" {
+    var buffer: [64]u8 = undefined;
+    var plain = Canvas.init(&buffer, .plain, true);
+    plain.text("50%");
+    const expected = plain.columns;
+
+    var zsh = Canvas.init(&buffer, .zsh, true);
+    zsh.text("50%");
+    try std.testing.expectEqual(expected, zsh.columns);
 }
