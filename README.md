@@ -155,7 +155,7 @@ with `…`, never written past its buffer.
 ```sh
 zig build             # 60 KiB static binary, ReleaseFast
 zig build -Dmode=safe # the same code with the safety checks on, for auditing
-zig build test        # 192 unit and integration tests
+zig build test        # 194 unit and integration tests
 zig build coverage    # the same tests under kcov, gate at 100% of lines
 zig build bench       # measure a real render, fork included
 zig build run -- render --no-color
