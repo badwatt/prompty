@@ -87,7 +87,16 @@ const clock_glyph = "\u{f051a}";
 /// the other about the command, and they must not read the same.
 const failure_glyph = "\u{00d7}";
 
-pub fn render(model: *const Model, buffer: []u8) []const u8 {
+/// What a prompt is: one line, and — when the shell has somewhere to put it — a
+/// second segment that belongs at the right edge. Encoding the pair for a shell
+/// is the caller's job: the domain does not know that zsh separates them with a
+/// control byte and bash has nowhere to put the second one.
+pub const Rendered = struct {
+    line: []const u8,
+    right: ?[]const u8 = null,
+};
+
+pub fn render(model: *const Model, buffer: []u8) Rendered {
     var canvas = Canvas.init(buffer, model.shell, model.color);
     canvas.text("\n");
 
@@ -184,7 +193,7 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         // The right segment is a second string, not padding: zsh draws it
         // against the right edge with `RPROMPT` and leaves the cursor after the
         // chevron, so the prompt never has to know how wide the terminal is.
-        canvas.text(&[_]u8{split});
+        const line_length = canvas.len;
         if (model.duration_ms) |milliseconds| {
             var digits: [duration_mod.max_length]u8 = undefined;
             const label = duration_mod.millis(&digits, milliseconds);
@@ -194,14 +203,13 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
             canvas.escape(bold_off);
             reset(&canvas);
         }
+        return .{
+            .line = canvas.bytes()[0..line_length],
+            .right = canvas.bytes()[line_length..],
+        };
     }
-    return canvas.bytes();
+    return .{ .line = canvas.bytes() };
 }
-
-/// Separates the line from the segment the shell puts at the right edge. It is
-/// a control character nobody types and no name contains, so no path or branch
-/// can forge it.
-pub const split = 0x1f;
 
 fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
     if (milliseconds >= 10_000) return theme.red;
@@ -284,11 +292,23 @@ const plain_buffer_size = Canvas.capacity;
 
 const path_mod = @import("path.zig");
 
+/// The line and the right segment joined the way the zsh integration does it,
+/// so the tests assert the bytes a shell would receive.
+const split = 0x1f;
+
 fn renderToString(model: *const Model) []const u8 {
-    const buffer = struct {
-        var bytes: [plain_buffer_size]u8 = undefined;
+    const storage = struct {
+        var buffer: [plain_buffer_size]u8 = undefined;
+        var joined: [plain_buffer_size]u8 = undefined;
     };
-    return render(model, &buffer.bytes);
+    const rendered = render(model, &storage.buffer);
+    if (rendered.right) |right| {
+        @memcpy(storage.joined[0..rendered.line.len], rendered.line);
+        storage.joined[rendered.line.len] = split;
+        @memcpy(storage.joined[rendered.line.len + 1 ..][0..right.len], right);
+        return storage.joined[0 .. rendered.line.len + 1 + right.len];
+    }
+    return rendered.line;
 }
 
 test "renders the full line without colour" {

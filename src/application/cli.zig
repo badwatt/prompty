@@ -40,6 +40,26 @@ pub const Action = union(enum) {
     invalid: []const u8,
 };
 
+/// Separates the line from the segment the shell puts at the right edge. It is
+/// a control character nobody types and no name contains, so no path or branch
+/// can forge it.
+const split = 0x1f;
+
+/// Enough for the right segment: the label, its colour, bold, and the reset.
+const right_segment_bytes = 64;
+
+/// The two halves as the shell receives them: the line, the separator, and the
+/// segment for the right edge.
+fn join(rendered: prompt.Rendered, buffer: []u8) []const u8 {
+    const right = rendered.right orelse return rendered.line;
+    const needed = rendered.line.len + 1 + right.len;
+    if (needed > buffer.len) return rendered.line;
+    @memcpy(buffer[0..rendered.line.len], rendered.line);
+    buffer[rendered.line.len] = split;
+    @memcpy(buffer[rendered.line.len + 1 ..][0..right.len], right);
+    return buffer[0..needed];
+}
+
 pub const exit_ok = 0;
 pub const exit_usage = 2;
 
@@ -170,7 +190,13 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
                 .git = options.git,
                 .duration = options.duration,
             });
-            host.stdout.write(prompt.render(&model, &buffer));
+            const rendered = prompt.render(&model, &buffer);
+            // The zsh integration splits on this byte to get PROMPT and
+            // RPROMPT; without a right segment the output is just the line.
+            // Either way it goes out in one write: a prompt is one syscall.
+            var joined: [canvas.Canvas.capacity + right_segment_bytes]u8 = undefined;
+            const bytes = join(rendered, &joined);
+            host.stdout.write(bytes);
             return exit_ok;
         },
         .init => |init| {
@@ -434,6 +460,21 @@ test "help is printed for no arguments and for help" {
     try std.testing.expectEqualStrings(implicit.host.stdout(), explicit.host.stdout());
 }
 
+test "the right segment still leaves in one write" {
+    const environment = base_environment ++ [_][2][]const u8{
+        .{ "PROMTY_LAST_DURATION_MS", "1234" },
+    };
+    var harness = CliHarness.init(&.{}, &environment);
+    try std.testing.expectEqual(
+        exit_ok,
+        harness.dispatch(&.{ "prompty", "render", "--shell=zsh", "--duration" }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), harness.host.out.writes);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, harness.host.stdout(), &[_]u8{split}));
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "1234ms") != null);
+    try std.testing.expect(std.mem.endsWith(u8, harness.host.stdout(), "%{\x1b[0m%}"));
+}
+
 test "render writes exactly one prompt and one write" {
     var harness = CliHarness.init(&.{}, &base_environment);
     try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "render", "--no-color" }));
@@ -527,9 +568,9 @@ test "a hostile name cannot forge the separator the shell splits on" {
     );
 
     const rendered = harness.host.stdout();
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{prompt.split}));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
     // And the right-hand side is only ever the number.
-    const right = rendered[std.mem.indexOfScalar(u8, rendered, prompt.split).? + 1 ..];
+    const right = rendered[std.mem.indexOfScalar(u8, rendered, split).? + 1 ..];
     try std.testing.expect(std.mem.startsWith(u8, right, "%{\x1b[38;2;"));
     try std.testing.expect(std.mem.indexOf(u8, right, "1234ms") != null);
     try std.testing.expect(std.mem.indexOf(u8, right, "evil") == null);

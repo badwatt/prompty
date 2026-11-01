@@ -351,7 +351,7 @@ test "a root shell is marked and can be rendered" {
     try std.testing.expect(model.is_root);
 
     var buffer: [canvas.Canvas.capacity]u8 = undefined;
-    const rendered = prompt.render(&model, &buffer);
+    const rendered = prompt.render(&model, &buffer).line;
     try std.testing.expect(std.mem.indexOf(u8, rendered, " dev ") != null);
 }
 
