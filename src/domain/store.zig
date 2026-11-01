@@ -8,8 +8,7 @@ const std = @import("std");
 
 pub const Store = struct {
     /// Eight kibibytes is far more than a prompt can ever need: a path is
-    /// bounded by `max_path_bytes`, a branch name by 256 bytes and the language
-    /// versions by 32 bytes each.
+    /// bounded by `max_display_bytes` and a branch name by 256 bytes.
     pub const capacity = 8192;
 
     bytes: [capacity]u8 = undefined,

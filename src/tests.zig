@@ -16,7 +16,6 @@ test {
     _ = @import("domain/duration.zig");
     _ = @import("domain/git.zig");
     _ = @import("domain/git_status.zig");
-    _ = @import("domain/language.zig");
     _ = @import("domain/osc.zig");
     _ = @import("domain/path.zig");
     _ = @import("domain/prompt.zig");

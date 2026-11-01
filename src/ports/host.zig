@@ -4,15 +4,6 @@
 
 const std = @import("std");
 
-pub const Entry = struct {
-    name: []const u8,
-    is_dir: bool,
-};
-
-/// Visitor invoked once per directory entry. `name` is only valid for the
-/// duration of the call.
-pub const Visitor = *const fn (context: *anyopaque, entry: Entry) void;
-
 pub const Files = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -21,7 +12,6 @@ pub const Files = struct {
         read: *const fn (ptr: *anyopaque, path: []const u8, buffer: []u8) ?[]u8,
         write: *const fn (ptr: *anyopaque, path: []const u8, bytes: []const u8) bool,
         exists: *const fn (ptr: *anyopaque, path: []const u8) bool,
-        scan: *const fn (ptr: *anyopaque, path: []const u8, context: *anyopaque, visitor: Visitor) bool,
         currentDir: *const fn (ptr: *anyopaque, buffer: []u8) ?[]const u8,
     };
 
@@ -39,12 +29,6 @@ pub const Files = struct {
 
     pub fn exists(self: Files, path: []const u8) bool {
         return self.vtable.exists(self.ptr, path);
-    }
-
-    /// Visits the entries of a directory. Returns false if the directory cannot
-    /// be opened at all.
-    pub fn scan(self: Files, path: []const u8, context: *anyopaque, visitor: Visitor) bool {
-        return self.vtable.scan(self.ptr, path, context, visitor);
     }
 
     pub fn currentDir(self: Files, buffer: []u8) ?[]const u8 {

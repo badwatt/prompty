@@ -11,13 +11,10 @@ pub const FakeFiles = struct {
         path: []const u8,
         contents: []const u8,
     };
-    pub const Directory = struct {
-        path: []const u8,
-        entries: []const ports.Entry,
-    };
-
     sources: []const File,
-    directories: []const Directory,
+    /// Paths the fake filesystem reports as "the working directory" candidates,
+    /// in the order `currentDir` should hand them out.
+    directories: []const []const u8,
     read_count: usize = 0,
     last_path: []const u8 = "",
     written: [4]Write = undefined,
@@ -31,7 +28,7 @@ pub const FakeFiles = struct {
         return .{ .sources = sources, .directories = &.{} };
     }
 
-    pub fn withDirectories(sources: []const File, directories: []const Directory) FakeFiles {
+    pub fn withDirectories(sources: []const File, directories: []const []const u8) FakeFiles {
         return .{ .sources = sources, .directories = directories };
     }
 
@@ -43,7 +40,6 @@ pub const FakeFiles = struct {
         .read = read,
         .write = write,
         .exists = exists,
-        .scan = scan,
         .currentDir = currentDir,
     };
 
@@ -82,17 +78,7 @@ pub const FakeFiles = struct {
             if (std.mem.eql(u8, file.path, path)) return true;
         }
         for (self.directories) |directory| {
-            if (std.mem.eql(u8, directory.path, path)) return true;
-        }
-        return false;
-    }
-
-    fn scan(ptr: *anyopaque, path: []const u8, context: *anyopaque, visitor: ports.Visitor) bool {
-        const self: *FakeFiles = @ptrCast(@alignCast(ptr));
-        for (self.directories) |directory| {
-            if (!std.mem.eql(u8, directory.path, path)) continue;
-            for (directory.entries) |entry| visitor(context, entry);
-            return true;
+            if (std.mem.eql(u8, directory, path)) return true;
         }
         return false;
     }
@@ -101,7 +87,7 @@ pub const FakeFiles = struct {
         const self: *FakeFiles = @ptrCast(@alignCast(ptr));
         // The first directory is the working directory of the fixture.
         if (self.directories.len == 0) return null;
-        const path = self.directories[0].path;
+        const path = self.directories[0];
         if (path.len > buffer.len) return null;
         @memcpy(buffer[0..path.len], path);
         return buffer[0..path.len];

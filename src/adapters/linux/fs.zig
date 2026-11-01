@@ -24,7 +24,6 @@ pub const Fs = struct {
         .read = readFile,
         .write = writeFile,
         .exists = exists,
-        .scan = scanDir,
         .currentDir = currentDir,
     };
 
@@ -101,54 +100,12 @@ pub const Fs = struct {
         }
     }
 
-    fn scanDir(_: *anyopaque, path: []const u8, context: *anyopaque, visitor: ports.Visitor) bool {
-        const options = linux.O{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true };
-        const fd = openPath(path, options, 0) orelse return false;
-        defer _ = linux.close(fd);
-
-        var buffer: [4096]u8 align(@alignOf(linux.dirent64)) = undefined;
-        while (true) {
-            // A directory is read with getdents64, never with read(2): the
-            // latter always fails with EISDIR.
-            const rc = linux.getdents64(fd, &buffer, buffer.len);
-            if (linux.errno(rc) != .SUCCESS) return false;
-            const filled: usize = rc;
-            if (filled == 0) return true;
-            var offset: usize = 0;
-            while (offset < filled) {
-                const record: *const linux.dirent64 = @ptrCast(@alignCast(&buffer[offset]));
-                // A zero-length record would spin forever, and the release
-                // build is the one that ships: check it, do not assert it.
-                if (record.reclen == 0 or offset + record.reclen > filled) return false;
-                const name = entryName(buffer[offset..filled]);
-                if (name) |valid| {
-                    visitor(context, .{
-                        .name = valid,
-                        .is_dir = record.type == linux.DT.DIR,
-                    });
-                }
-                offset += record.reclen;
-            }
-        }
-    }
-
     fn currentDir(_: *anyopaque, buffer: []u8) ?[]const u8 {
         const rc = linux.getcwd(buffer.ptr, buffer.len);
         if (linux.errno(rc) != .SUCCESS) return null;
         // The kernel returns the length including the trailing NUL.
         if (rc == 0 or rc > buffer.len) return null;
         return buffer[0 .. rc - 1];
-    }
-
-    fn entryName(available: []const u8) ?[]const u8 {
-        const name_offset = @offsetOf(linux.dirent64, "name");
-        if (available.len <= name_offset) return null;
-        const name_field = available[name_offset..];
-        const end = std.mem.indexOfScalar(u8, name_field, 0) orelse return null;
-        const name = name_field[0..end];
-        if (name.len == 0) return null;
-        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return null;
-        return name;
     }
 
     fn openPath(path: []const u8, options: linux.O, mode: linux.mode_t) ?linux.fd_t {
@@ -167,7 +124,7 @@ pub const Fs = struct {
     }
 };
 
-test "the real adapter reads, lists, writes and reports the working directory" {
+test "the real adapter reads, writes and reports the working directory" {
     const files = Fs.instance.files();
 
     var cwd_buffer: [4096]u8 = undefined;
@@ -182,23 +139,6 @@ test "the real adapter reads, lists, writes and reports the working directory" {
     try std.testing.expect(files.read("src/definitely/missing", &content_buffer) == null);
     try std.testing.expect(!files.exists("src/definitely/missing"));
     try std.testing.expect(files.exists("src/adapters/linux/fs.zig"));
-
-    const Counter = struct {
-        seen: usize = 0,
-        seen_directory: bool = false,
-
-        fn visit(context: *anyopaque, entry: ports.Entry) void {
-            const self: *@This() = @ptrCast(@alignCast(context));
-            self.seen += 1;
-            if (entry.is_dir and std.mem.eql(u8, entry.name, "domain")) self.seen_directory = true;
-        }
-    };
-
-    var counter = Counter{};
-    try std.testing.expect(files.scan("src", &counter, Counter.visit));
-    try std.testing.expect(counter.seen > 3);
-    try std.testing.expect(counter.seen_directory);
-    try std.testing.expect(!files.scan("src/definitely/missing", &counter, Counter.visit));
 
     // Writing creates every missing ancestor.
     var path_buffer: [128]u8 = undefined;

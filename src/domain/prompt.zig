@@ -6,7 +6,7 @@
 //!
 //! The three pill segments fade towards the terminal background from left to
 //! right, then the chevron returns to it. Everything after the pill is dimmed
-//! detail: languages, direnv, last exit status, duration and the clock.
+//! detail: direnv, duration, the clock and the last exit status.
 
 const std = @import("std");
 const canvas_mod = @import("canvas.zig");
@@ -14,7 +14,6 @@ const clock_mod = @import("clock.zig");
 const duration_mod = @import("duration.zig");
 const git_mod = @import("git.zig");
 const git_status_mod = @import("git_status.zig");
-const language_mod = @import("language.zig");
 const theme_mod = @import("theme.zig");
 
 const Canvas = canvas_mod.Canvas;
@@ -28,11 +27,6 @@ pub const Git = struct {
     status: git_status_mod.Status = .{},
 };
 
-pub const Language = struct {
-    kind: language_mod.Kind,
-    version: ?[]const u8,
-};
-
 pub const Model = struct {
     theme: theme_mod.Theme,
     shell: Shell = .plain,
@@ -41,24 +35,10 @@ pub const Model = struct {
     is_root: bool = false,
     path: []const u8,
     git: ?Git = null,
-    languages: [max_languages]Language = undefined,
-    language_count: u8 = 0,
     time: ?clock_mod.TimeOfDay = null,
     duration_ms: ?u64 = null,
     exit_code: ?u8 = null,
     direnv: bool = false,
-
-    pub const max_languages = 5;
-
-    pub fn addLanguage(self: *Model, language: Language) void {
-        std.debug.assert(self.language_count < max_languages);
-        self.languages[self.language_count] = language;
-        self.language_count += 1;
-    }
-
-    pub fn detectedLanguages(self: *const Model) []const Language {
-        return self.languages[0..self.language_count];
-    }
 };
 
 const powerline = struct {
@@ -150,14 +130,6 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
     closePill(&canvas, surface);
 
     var extras = Extras{ .canvas = &canvas, .theme = &model.theme };
-    for (model.detectedLanguages()) |language| {
-        extras.begin(model.theme.text);
-        extras.text(language.kind.icon());
-        if (language.version) |version| {
-            extras.text(" ");
-            extras.text(version);
-        }
-    }
     if (model.direnv) {
         extras.begin(model.theme.green);
         extras.text(direnv_glyph);
@@ -280,16 +252,8 @@ fn renderToString(model: *const Model) []const u8 {
     return render(model, &buffer.bytes);
 }
 
-/// Models are built by the compiler use case, which fills the language array in
-/// place; tests describe the same thing and let this fill it in.
-fn withLanguages(base: Model, languages: []const Language) Model {
-    var model = base;
-    for (languages) |language| model.addLanguage(language);
-    return model;
-}
-
 test "renders the full line without colour" {
-    const model = withLanguages(.{
+    const model = Model{
         .theme = fixtureTheme(),
         .color = false,
         .user = "badwatt",
@@ -297,11 +261,11 @@ test "renders the full line without colour" {
         .git = .{ .branch = "main", .operation = .none, .detached = false },
         .time = .{ .hour = 12, .minute = 4 },
         .duration_ms = 1_234,
-    }, &.{.{ .kind = .zig, .version = "0.17.0" }});
+    };
     try std.testing.expectEqualStrings(
         "\n" ++
             "\u{e0b6} badwatt \u{e0b0} ~/src/prompty \u{e0b0} \u{f113} main \u{e0b0}" ++
-            " \u{e6a9} 0.17.0  1.2s  \u{f051a} 12:04 \u{276f} ",
+            " 1.2s  \u{f051a} 12:04 \u{276f} ",
         renderToString(&model),
     );
 }
@@ -434,21 +398,16 @@ test "detached heads and in-progress operations are visible" {
     );
 }
 
-test "failure, direnv and several languages all appear" {
-    const model = withLanguages(.{
+test "direnv and a failed command are both marked" {
+    const model = Model{
         .theme = fixtureTheme(),
         .color = false,
         .path = "~/mono",
         .git = .{ .branch = "dev", .operation = .merge, .detached = false },
         .direnv = true,
         .exit_code = 130,
-    }, &.{
-        .{ .kind = .zig, .version = null },
-        .{ .kind = .go, .version = "1.22.3" },
-        .{ .kind = .odin, .version = null },
-    });
+    };
     const rendered = renderToString(&model);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{e6a9}  \u{f07d3} 1.22.3  \u{f10d3}") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{f0d6e}") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{00d7}") != null);
     // The exit code itself is not printed: it would only distinguish failures
@@ -602,15 +561,14 @@ test "bash output wraps every escape and quotes backslashes" {
 }
 
 test "the buffer bound is never exceeded by a maximal prompt" {
-    // Every field at the largest size the rest of the program can hand over:
-    // a path clipped to its budget, a branch at its limit, five languages with
-    // versions at theirs, every marker on, and zsh's escape wrappers.
+    // Every field at the largest size the rest of the program can hand over: a
+    // path clipped to its budget, a branch at its limit, every marker on, and
+    // zsh's escape wrappers around each sequence.
     var path_buffer: [path_mod.max_display_bytes]u8 = @splat('a');
-    const user_buffer: [64]u8 = @splat('u');
     var branch_buffer: [git_mod.max_head_bytes]u8 = @splat('b');
-    const versions = [_][]const u8{ "0.17.0", "1.80.0", "1.22.3", "20.11.0", "dev-2024-01" };
+    const user_buffer: [64]u8 = @splat('u');
 
-    const base = Model{
+    const model = Model{
         .theme = fixtureTheme(),
         .shell = .zsh,
         .user = &user_buffer,
@@ -637,13 +595,6 @@ test "the buffer bound is never exceeded by a maximal prompt" {
         .exit_code = 255,
         .direnv = true,
     };
-    const model = withLanguages(base, &.{
-        .{ .kind = .zig, .version = versions[0] },
-        .{ .kind = .rust, .version = versions[1] },
-        .{ .kind = .go, .version = versions[2] },
-        .{ .kind = .node, .version = versions[3] },
-        .{ .kind = .odin, .version = versions[4] },
-    });
 
     const rendered = renderToString(&model);
     try std.testing.expect(rendered.len < plain_buffer_size);

@@ -24,11 +24,20 @@ the default configuration of each prompt:
 | binary size                                                                  | **79 KiB**  | 13.4 MiB        |
 
 The polyglot row is 30× because of what each prompt does when it sees a
-project: starship runs `node --version`, `go version`, `cargo --version` and
-so on, once per toolchain, on every single command. prompty reads the files the
-project already carries — `.nvmrc`, `go.mod`, `rust-toolchain.toml`,
-`.zigversion`, `build.zig.zon` — and shows nothing when the project does not pin
-a version.
+project: starship runs `node --version`, `go version`, `cargo --version` and so
+on, once per toolchain, on every single command. prompty does not look at the
+project at all.
+
+That difference is also why the directory listing is gone. A directory listing
+costs what the directory holds, not what the prompt shows:
+
+| directory | prompty | previous revision |
+|---|---|---|
+| 20,000 entries | **1.06 ms** (22 syscalls) | 7.93 ms (202 syscalls) |
+
+The listing was read in 4 KiB chunks and never stopped early, so 178
+`getsdents64` calls were paid on every prompt in a big directory. Nothing is
+listed now: a render is 22 syscalls whatever the directory contains.
 
 Inside a repository the remaining cost is `git status`: prompty runs it once,
 4 ms, and that is the whole difference between the second-to-last row and the
@@ -107,9 +116,9 @@ microseconds. A Nerd Font is needed for the glyphs.
 
 - **One subprocess in total**, and only inside a repository: a single
   `git status --porcelain=v2 --branch` for the branch, the change counts and the
-  upstream divergence. Everything else is file reads: the project type from one
-  `getdents64`, versions from files the project already has, the clock from
-  `CLOCK_REALTIME` plus the TZif file, the stash from `refs/stash`.
+  upstream divergence. Everything else is a few file reads: the clock from
+  `CLOCK_REALTIME` plus the TZif file, the stash from `refs/stash`, and nothing
+  else at all — the prompt never lists a directory.
 - **No allocation.** Every buffer is a fixed-size stack array; the program is a
   static binary that issues about 35 syscalls per prompt.
 - **No configuration file.** The palette is derived from the terminal background
@@ -140,7 +149,6 @@ prompty version                                        print name and version
 | status      | `= $ ✘ » ! + ?` and `⇡ ⇣ ⇕`, no counts                         | (same call)             |
 | operation   | `rebase-merge`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `BISECT_LOG` | 5 stat-only opens       |
 | stash       | `.git/refs/stash` or its reflog                                | 2 opens                 |
-| languages   | one directory listing, then a version file per project         | 1 read + 1 per language |
 | direnv      | `$DIRENV_DIFF`                                                 | —                       |
 | duration    | `$PROMTY_LAST_DURATION_MS`                                     | —                       |
 | clock       | `CLOCK_REALTIME` + `/etc/localtime`                            | 1 read                  |
@@ -201,8 +209,12 @@ slow. So it is one subprocess, and it can be switched off.
 
 ### What it deliberately does not do
 
-- **No toolchain versions.** prompty shows what the project pins, never what
-  happens to be installed.
+- **No language detection, at all.** No icons, no versions, no toolchain
+  probes. Recognising a project means listing the directory, and a listing costs
+  what the directory holds: in a directory with twenty thousand entries it was
+  seven times the cost of the rest of the prompt. What it showed was a glyph and
+  a version the project may or may not pin, which is not worth a cost that
+  scales with somebody else's file count.
 - **No second subprocess.** There is no `node --version`, no `go version`, no
   `git rev-parse` on top of the status call.
 

@@ -12,7 +12,6 @@ const canvas = @import("../domain/canvas.zig");
 const clock_mod = @import("../domain/clock.zig");
 const git_mod = @import("../domain/git.zig");
 const git_status_mod = @import("../domain/git_status.zig");
-const language_mod = @import("../domain/language.zig");
 const osc_mod = @import("../domain/osc.zig");
 const path_mod = @import("../domain/path.zig");
 const prompt = @import("../domain/prompt.zig");
@@ -75,8 +74,6 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
         .repository_root = if (repository) |found| found.root else null,
         .keep = options.keep_components,
     }));
-
-    addLanguages(host, working_directory, store, &model);
 
     const unix_seconds = host.clock.now();
     model.time = clock_mod.fromUnix(unix_seconds, host.clock.offsetAt(unix_seconds));
@@ -325,104 +322,6 @@ fn existsIn(host: ports.Host, git_dir: []const u8, name: []const u8, scratch: []
     return host.files.exists(path);
 }
 
-const LanguageProbe = struct {
-    set: language_mod.Set = language_mod.Set.empty(),
-
-    fn visit(context: *anyopaque, entry: ports.Entry) void {
-        const self: *LanguageProbe = @ptrCast(@alignCast(context));
-        language_mod.classifyName(&self.set, entry.name, entry.is_dir);
-    }
-};
-
-const detected_order = [_]language_mod.Kind{ .zig, .rust, .go, .node, .odin };
-
-fn addLanguages(
-    host: ports.Host,
-    working_directory: []const u8,
-    store: *store_mod.Store,
-    model: *prompt.Model,
-) void {
-    var probe = LanguageProbe{};
-    if (!host.files.scan(working_directory, &probe, LanguageProbe.visit)) return;
-
-    for (detected_order) |kind| {
-        if (!probe.set.has(kind)) continue;
-        model.addLanguage(.{
-            .kind = kind,
-            .version = versionFor(host, working_directory, kind, store),
-        });
-    }
-}
-
-fn versionFor(
-    host: ports.Host,
-    working_directory: []const u8,
-    kind: language_mod.Kind,
-    store: *store_mod.Store,
-) ?[]const u8 {
-    var path_buffer: [path_mod.max_display_bytes * 2]u8 = undefined;
-    var contents: [16 * 1024]u8 = undefined;
-
-    switch (kind) {
-        .zig => {
-            if (fromPlainFile(host, working_directory, ".zigversion", &path_buffer, &contents)) |version| {
-                return store.dupePrintable(version);
-            }
-            if (read(host, working_directory, "build.zig.zon", &path_buffer, &contents)) |zon| {
-                if (language_mod.zigVersionFromZon(zon)) |version| return store.dupePrintable(version);
-            }
-            return null;
-        },
-        .rust => {
-            if (read(host, working_directory, "rust-toolchain.toml", &path_buffer, &contents)) |toml| {
-                if (language_mod.rustVersionFromToolchain(toml)) |version| return store.dupePrintable(version);
-            }
-            if (fromPlainFile(host, working_directory, "rust-toolchain", &path_buffer, &contents)) |version| {
-                return store.dupePrintable(version);
-            }
-            return null;
-        },
-        .go => {
-            if (read(host, working_directory, "go.mod", &path_buffer, &contents)) |mod| {
-                if (language_mod.goVersionFromMod(mod)) |version| return store.dupePrintable(version);
-            }
-            return null;
-        },
-        .node => {
-            if (fromPlainFile(host, working_directory, ".nvmrc", &path_buffer, &contents)) |version| {
-                return store.dupePrintable(version);
-            }
-            if (fromPlainFile(host, working_directory, ".node-version", &path_buffer, &contents)) |version| {
-                return store.dupePrintable(version);
-            }
-            return null;
-        },
-        .odin => return null,
-    }
-}
-
-fn fromPlainFile(
-    host: ports.Host,
-    working_directory: []const u8,
-    name: []const u8,
-    path_buffer: []u8,
-    contents: []u8,
-) ?[]const u8 {
-    const text = read(host, working_directory, name, path_buffer, contents) orelse return null;
-    return language_mod.plainVersion(text);
-}
-
-fn read(
-    host: ports.Host,
-    working_directory: []const u8,
-    name: []const u8,
-    path_buffer: []u8,
-    contents: []u8,
-) ?[]const u8 {
-    const path = join(path_buffer, working_directory, name) orelse return null;
-    return host.files.read(path, contents);
-}
-
 fn join(buffer: []u8, directory: []const u8, suffix: []const u8) ?[]u8 {
     std.debug.assert(suffix.len > 0);
     if (directory.len == 0) return copy(buffer, suffix);
@@ -492,23 +391,10 @@ test "copy refuses to overflow the destination" {
 
 const fakes = @import("../test_support/fakes.zig");
 
-const project_entries = [_]ports.Entry{
-    .{ .name = "build.zig", .is_dir = false },
-    .{ .name = "build.zig.zon", .is_dir = false },
-    .{ .name = "go.mod", .is_dir = false },
-    .{ .name = ".zigversion", .is_dir = false },
-    .{ .name = "src", .is_dir = true },
-    .{ .name = "README.md", .is_dir = false },
-};
+const project_directories = [_][]const u8{"/home/dev/proj"};
 
 const project_sources = [_]fakes.FakeFiles.File{
     .{ .path = "/home/dev/proj/.git/HEAD", .contents = "ref: refs/heads/main\n" },
-    .{ .path = "/home/dev/proj/.zigversion", .contents = "0.17.0\n" },
-    .{ .path = "/home/dev/proj/go.mod", .contents = "module example.com/proj\n\ngo 1.22.3\n" },
-};
-
-const project_directories = [_]fakes.FakeFiles.Directory{
-    .{ .path = "/home/dev/proj", .entries = &project_entries },
 };
 
 const FakeHarness = struct {
@@ -558,14 +444,6 @@ test "collects every fact from a fake project" {
     try std.testing.expectEqualStrings("main", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
     try std.testing.expect(!model.git.?.detached);
-
-    // The order is fixed so the prompt never flickers between renders.
-    const languages = model.detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 2), languages.len);
-    try std.testing.expectEqual(language_mod.Kind.zig, languages[0].kind);
-    try std.testing.expectEqualStrings("0.17.0", languages[0].version.?);
-    try std.testing.expectEqual(language_mod.Kind.go, languages[1].kind);
-    try std.testing.expectEqualStrings("1.22.3", languages[1].version.?);
 }
 
 test "a root shell is marked and can be rendered" {
@@ -587,10 +465,7 @@ test "the working directory falls back to getcwd and then to root" {
         try std.testing.expectEqualStrings("/", harness.model(.{}).path);
     }
     {
-        const entries = [_]ports.Entry{.{ .name = "go.mod", .is_dir = false }};
-        const directories = [_]fakes.FakeFiles.Directory{
-            .{ .path = "/home/dev/scratch", .entries = &entries },
-        };
+        const directories = [_][]const u8{"/home/dev/scratch"};
         var harness = FakeHarness.init(&.{ .{ "HOME", "/home/dev" }, .{ "PWD", "relative" } });
         harness.host.files.directories = &directories;
         try std.testing.expectEqualStrings("~/scratch", harness.model(.{}).path);
@@ -602,9 +477,9 @@ test "repository state is read from marker files" {
         .{ .path = "/home/dev/proj/.git/HEAD", .contents = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\n" },
         .{ .path = "/home/dev/proj/.git/rebase-merge/head-name", .contents = "refs/heads/topic\n" },
     };
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &project_entries },
-        .{ .path = "/home/dev/proj/.git/rebase-merge", .entries = &.{} },
+    const directories = [_][]const u8{
+        "/home/dev/proj",
+        "/home/dev/proj/.git/rebase-merge",
     };
     var harness = FakeHarness.init(&default_environment);
     harness.host.files.sources = &sources;
@@ -670,51 +545,6 @@ test "no repository means no git segment" {
     var harness = FakeHarness.init(&default_environment);
     harness.host.files.sources = &.{};
     try std.testing.expectEqual(@as(?prompt.Git, null), harness.model(.{}).git);
-}
-
-test "language versions come from the files the project already has" {
-    const entries = [_]ports.Entry{
-        .{ .name = "Cargo.toml", .is_dir = false },
-        .{ .name = "package.json", .is_dir = false },
-    };
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &entries },
-    };
-    const sources = [_]fakes.FakeFiles.File{
-        .{ .path = "/home/dev/proj/rust-toolchain.toml", .contents = "[toolchain]\nchannel = \"1.80.0\"\n" },
-        .{ .path = "/home/dev/proj/.nvmrc", .contents = "v20.11.0\n" },
-    };
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.sources = &sources;
-    harness.host.files.directories = &directories;
-
-    const languages = harness.model(.{}).detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 2), languages.len);
-    try std.testing.expectEqual(language_mod.Kind.rust, languages[0].kind);
-    try std.testing.expectEqualStrings("1.80.0", languages[0].version.?);
-    try std.testing.expectEqual(language_mod.Kind.node, languages[1].kind);
-    try std.testing.expectEqualStrings("20.11.0", languages[1].version.?);
-}
-
-test "languages without a pinned version still show their icon" {
-    const entries = [_]ports.Entry{.{ .name = "main.odin", .is_dir = false }};
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &entries },
-    };
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.sources = &.{};
-    harness.host.files.directories = &directories;
-
-    const languages = harness.model(.{}).detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 1), languages.len);
-    try std.testing.expectEqual(language_mod.Kind.odin, languages[0].kind);
-    try std.testing.expectEqual(@as(?[]const u8, null), languages[0].version);
-}
-
-test "an unreadable project root simply has no languages" {
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.directories = &.{};
-    try std.testing.expectEqual(@as(usize, 0), harness.model(.{}).detectedLanguages().len);
 }
 
 test "the clock is read through the port" {
@@ -846,85 +676,6 @@ test "detection fails cleanly and is not remembered without a cache location" {
     try std.testing.expectEqual(@as(?theme_mod.Rgb, null), detectBackground(harness.host.host()));
 
     try std.testing.expect(!rememberBackground(harness.host.host(), default_theme_background));
-}
-
-test "rust falls back to the plain toolchain file" {
-    const entries = [_]ports.Entry{.{ .name = "Cargo.toml", .is_dir = false }};
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &entries },
-    };
-    const sources = [_]fakes.FakeFiles.File{
-        .{ .path = "/home/dev/proj/rust-toolchain", .contents = "1.79.0\n" },
-    };
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.sources = &sources;
-    harness.host.files.directories = &directories;
-
-    const languages = harness.model(.{}).detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 1), languages.len);
-    try std.testing.expectEqualStrings("1.79.0", languages[0].version.?);
-}
-
-test "node falls back to .node-version and go without a directive has none" {
-    const entries = [_]ports.Entry{
-        .{ .name = "package.json", .is_dir = false },
-        .{ .name = "go.mod", .is_dir = false },
-    };
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &entries },
-    };
-    const sources = [_]fakes.FakeFiles.File{
-        .{ .path = "/home/dev/proj/.node-version", .contents = "18.20.0\n" },
-        .{ .path = "/home/dev/proj/go.mod", .contents = "module example.com/proj\n" },
-    };
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.sources = &sources;
-    harness.host.files.directories = &directories;
-
-    const languages = harness.model(.{}).detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 2), languages.len);
-    try std.testing.expectEqual(language_mod.Kind.go, languages[0].kind);
-    try std.testing.expectEqual(@as(?[]const u8, null), languages[0].version);
-    try std.testing.expectEqual(language_mod.Kind.node, languages[1].kind);
-    try std.testing.expectEqualStrings("18.20.0", languages[1].version.?);
-}
-
-test "a zig project without a version file falls back to its manifest" {
-    const entries = [_]ports.Entry{.{ .name = "build.zig.zon", .is_dir = false }};
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &entries },
-    };
-    const sources = [_]fakes.FakeFiles.File{
-        .{ .path = "/home/dev/proj/build.zig.zon", .contents = ".{ .minimum_zig_version = \"0.16.0\" }" },
-    };
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.sources = &sources;
-    harness.host.files.directories = &directories;
-
-    const languages = harness.model(.{}).detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 1), languages.len);
-    try std.testing.expectEqualStrings("0.16.0", languages[0].version.?);
-}
-
-test "a toolchain file without a usable channel means no version" {
-    const entries = [_]ports.Entry{
-        .{ .name = "Cargo.toml", .is_dir = false },
-        .{ .name = "package.json", .is_dir = false },
-    };
-    const directories = [_]fakes.FakeFiles.Directory{
-        .{ .path = "/home/dev/proj", .entries = &entries },
-    };
-    const sources = [_]fakes.FakeFiles.File{
-        .{ .path = "/home/dev/proj/rust-toolchain.toml", .contents = "[toolchain]\n" },
-    };
-    var harness = FakeHarness.init(&default_environment);
-    harness.host.files.sources = &sources;
-    harness.host.files.directories = &directories;
-
-    const languages = harness.model(.{}).detectedLanguages();
-    try std.testing.expectEqual(@as(usize, 2), languages.len);
-    try std.testing.expectEqual(@as(?[]const u8, null), languages[0].version);
-    try std.testing.expectEqual(@as(?[]const u8, null), languages[1].version);
 }
 
 const status_porcelain =

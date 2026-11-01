@@ -14,13 +14,16 @@ The budget, in order of what actually costs:
    dynamic linking. The 12 MiB debug build costs 0.4 ms more per prompt purely
    in page faults, which is why `zig build` defaults to ReleaseFast and strips.
 2. **Subprocesses.** `node --version` is 30-60 ms on a cold cache, and running
-   one per language per prompt is the usual way to lose a prompt. prompty
-   spawns exactly one process, and
-   only inside a repository: `git status --porcelain=v2 --branch`, at about
-   4 ms, which is why the repository case is 5 ms and the rest is 0.7 ms.
-3. **Syscalls.** 35 on the happy path: one `getdents64` per project root, a
-   handful of `openat` for `.git` and the manifests, one `clock_gettime`.
-4. **Bytes written.** One `write` per prompt, assembled in a 2 KiB stack buffer.
+   one per toolchain per prompt is the usual way to lose a prompt. prompty
+   spawns exactly one process, and only inside a repository:
+   `git status --porcelain=v2 --branch`, at about 4 ms, which is why the
+   repository case is 5 ms and everything else is 1 ms.
+3. **Directory listings.** None. A listing costs what the directory holds, not
+   what the prompt shows, so the cost of a render must not depend on somebody
+   else's file count.
+4. **Syscalls.** 22 on the happy path: a handful of `openat` for `.git`, one
+   `clock_gettime`, one `write`. Nothing proportional to the directory.
+5. **Bytes written.** One `write` per prompt, assembled in a 2 KiB stack buffer.
 
 ## The hexagon
 
@@ -28,7 +31,7 @@ The budget, in order of what actually costs:
             ┌───────────────────────────────┐
             │           domain              │  pure, no I/O, no allocation
             │  theme  canvas  path  git     │
-            │  language  clock  duration    │
+            │  clock  duration  git_status  │
             │  osc  cache  prompt  store    │
             └──────────────┬────────────────┘
                            │
@@ -89,7 +92,7 @@ claims checkable rather than aspirational.
 - **One line, one write.** `prompt.render` returns a slice of one buffer, and
   the CLI hands it to one `write`.
 - **Degrade, never fail.** A missing zone file means UTC, a silent terminal
-  means the default palette, an unreadable index means no languages. There is no
+  means the default palette, an unreadable status means only the branch. There is no
   path in which a prompt fails to appear.
 
 ## The palette
@@ -188,8 +191,12 @@ rather than a fast approximation that lies about a dirty tree.
 
 ## Deliberate omissions
 
-- **Toolchain version calls.** `.zigversion`, `go.mod` and friends say what the
-  project pins; `node --version` says what is installed and costs 30-60 ms.
+- **Language detection.** Removed after measuring: recognising a project needs
+  a directory listing, a listing costs what the directory holds (178
+  `getdents64` calls and 7.9 ms in a directory with twenty thousand entries,
+  against 1.06 ms and 22 syscalls without it), and what it bought was an icon
+  and a version string. A prompt must cost the same in an empty directory and
+  in a build tree.
 - **Config files.** Every option is a reason for the prompt to read another file
   and for the user to spend an evening tuning it. The palette comes from the
   terminal; the rest is a judgement call, made once.
