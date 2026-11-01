@@ -67,6 +67,11 @@ pub const Runner = struct {
             _ = linux.close(read_end);
             _ = linux.dup2(write_end, posix.STDOUT_FILENO);
             _ = linux.close(write_end);
+            // The parent blocks the fatal signals while it talks to the
+            // terminal, and a child would inherit that mask and become
+            // uninterruptible. Nothing blocked, then become the program.
+            var empty = posix.sigemptyset();
+            posix.sigprocmask(posix.SIG.SETMASK, &empty, null);
             divert(self, argv[0], arguments);
         }
 
