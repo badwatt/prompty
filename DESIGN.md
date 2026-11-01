@@ -64,8 +64,9 @@ claims checkable rather than aspirational.
   violated by accident.
 - **Bounded loops.** The git walk is capped at 64 levels and asserts its bound;
   a directory scan is bounded by the kernel's `getdents64` buffer; path
-  shortening keeps at most eight display components, and `~` occupies one of
-  them exactly as it does in starship.
+  shortening keeps at most eight display components; `~` occupies one of them
+  and, inside a repository, the label is anchored on the repository name,
+  exactly as starship's `truncation_length` and `truncate_to_repo` do.
 - **One line, one write.** `prompt.render` returns a slice of one buffer, and
   the CLI hands it to one `write`.
 - **Degrade, never fail.** A missing zone file means UTC, a silent terminal

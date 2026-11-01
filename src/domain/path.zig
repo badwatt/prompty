@@ -1,11 +1,16 @@
 //! Turns an absolute working directory into the short label shown in the
-//! prompt: `~` for the home directory, and only the last `keep` components when
-//! the path goes deeper than the prompt can afford.
+//! prompt.
 //!
-//! `keep` counts display components, and the `~` marker is one of them: three
-//! levels below home do not fit in three, because `~` already took a slot. That
-//! is the rule starship's `truncation_length` follows, and matching it means a
-//! prompt swap does not change how the path reads.
+//! Two rules, and they have to agree with the prompt this replaces, because a
+//! path that reads differently after a swap is a daily annoyance:
+//!
+//! - Inside a repository, the label is the repository name plus the directories
+//!   below it, always prefixed with the truncation symbol, because the
+//!   repository's ancestors were hidden. `~/Projects/code/prompty/src` reads
+//!   `…/prompty/src`.
+//! - Otherwise the label is the path relative to home (`~` counts as one of the
+//!   kept components), or the absolute path, and the last `keep` components are
+//!   kept. `~/a/b/c` reads `…/a/b/c`, `/usr/share/doc` is untouched.
 
 const std = @import("std");
 
@@ -17,68 +22,134 @@ pub const max_display_bytes = 512;
 /// buffer below.
 pub const max_keep: u8 = 8;
 
-pub fn display(out: []u8, cwd: []const u8, home: []const u8, keep: u8) []const u8 {
+pub const truncation_symbol = "…/";
+
+pub const Input = struct {
+    cwd: []const u8,
+    home: []const u8 = "",
+    /// The worktree root of the repository the working directory is in, if any.
+    repository_root: ?[]const u8 = null,
+    keep: u8 = 3,
+};
+
+pub fn display(out: []u8, input: Input) []const u8 {
     std.debug.assert(out.len >= max_display_bytes);
-    std.debug.assert(keep > 0);
-    std.debug.assert(keep <= max_keep);
+    std.debug.assert(input.keep > 0);
+    std.debug.assert(input.keep <= max_keep);
 
-    const path = trimTrailingSlashes(cwd);
-    if (path.len == 0) return "/";
+    const cwd = trimTrailingSlashes(input.cwd);
+    if (cwd.len == 0) return "/";
+    if (std.mem.eql(u8, cwd, "/")) return "/";
 
-    var rest = path;
-    var shortened_prefix: []const u8 = "";
-    if (home.len > 1 and std.mem.startsWith(u8, path, home)) {
-        const after_home = path[home.len..];
-        if (after_home.len == 0) return "~";
-        if (after_home[0] == '/') {
-            shortened_prefix = "~";
-            rest = trimTrailingSlashes(after_home[1..]);
-            if (rest.len == 0) return "~";
+    // Inside a repository the name of the repository is the anchor, and
+    // everything above it is dropped, which is what the symbol announces.
+    if (input.repository_root) |root| {
+        if (below(cwd, trimTrailingSlashes(root))) |remainder| {
+            const name = baseName(trimTrailingSlashes(root));
+            if (name.len > 0) {
+                return assemble(out, .{
+                    .first = name,
+                    .rest = remainder,
+                    .keep = input.keep,
+                    .rooted = false,
+                    .always_truncated = true,
+                });
+            }
         }
     }
 
-    const rooted = rest.len > 0 and rest[0] == '/' and shortened_prefix.len == 0;
-    // `~` occupies a slot exactly like a directory name does.
-    const home_marker: usize = @intFromBool(shortened_prefix.len > 0);
+    if (input.home.len > 1) {
+        if (below(cwd, trimTrailingSlashes(input.home))) |remainder| {
+            return assemble(out, .{
+                .first = "~",
+                .rest = remainder,
+                .keep = input.keep,
+                .rooted = false,
+                .always_truncated = false,
+            });
+        }
+    }
 
-    // Keep the last `keep` components: a path may be arbitrarily deep but the
-    // prompt only ever shows a bounded tail.
+    return assemble(out, .{
+        .first = null,
+        .rest = cwd,
+        .keep = input.keep,
+        .rooted = cwd[0] == '/',
+        .always_truncated = false,
+    });
+}
+
+const Parts = struct {
+    /// A pseudo-component rendered verbatim, such as `~` or the repository name.
+    first: ?[]const u8,
+    /// The remaining slash-separated components, with or without a leading `/`.
+    rest: []const u8,
+    keep: u8,
+    rooted: bool,
+    always_truncated: bool,
+};
+
+fn assemble(out: []u8, parts: Parts) []const u8 {
+    // Keep a rolling window of the last `keep` components: a path may be
+    // arbitrarily deep but the prompt only ever shows a bounded tail.
     var tail: [max_keep][]const u8 = undefined;
     var tail_length: usize = 0;
     var total: usize = 0;
-    var index: usize = 0;
-    while (index < rest.len) {
-        while (index < rest.len and rest[index] == '/') index += 1;
-        const start = index;
-        while (index < rest.len and rest[index] != '/') index += 1;
-        if (index == start) break;
-        if (tail_length < keep) {
-            tail[tail_length] = rest[start..index];
-            tail_length += 1;
-        } else {
-            std.mem.copyForwards([]const u8, tail[0 .. keep - 1], tail[1..keep]);
-            tail[keep - 1] = rest[start..index];
-        }
+
+    if (parts.first) |first| {
+        push(&tail, &tail_length, parts.keep, first);
         total += 1;
     }
 
+    // Tokenising skips repeated separators, which are legal in a path.
+    var components = std.mem.tokenizeScalar(u8, parts.rest, '/');
+    while (components.next()) |component| {
+        push(&tail, &tail_length, parts.keep, component);
+        total += 1;
+    }
+
+    std.debug.assert(tail_length > 0);
+
+    const truncated = parts.always_truncated or total > parts.keep;
     var written: usize = 0;
+    if (truncated) {
+        written = append(out, written, truncation_symbol);
+    } else if (parts.rooted) {
+        written = append(out, written, "/");
+    }
+
     for (tail[0..tail_length], 0..) |component, position| {
-        if (position == 0) {
-            if (total + home_marker > keep) {
-                written = append(out, written, "…/");
-            } else if (shortened_prefix.len > 0) {
-                written = append(out, written, "~/");
-            } else if (rooted) {
-                written = append(out, written, "/");
-            }
-        } else {
-            written = append(out, written, "/");
-        }
+        if (position > 0) written = append(out, written, "/");
         written = append(out, written, component);
     }
-    std.debug.assert(written > 0);
     return out[0..written];
+}
+
+fn push(tail: *[max_keep][]const u8, length: *usize, keep: u8, component: []const u8) void {
+    if (length.* < keep) {
+        tail[length.*] = component;
+        length.* += 1;
+        return;
+    }
+    std.mem.copyForwards([]const u8, tail[0 .. keep - 1], tail[1..keep]);
+    tail[keep - 1] = component;
+}
+
+/// If `path` is `root` or lives inside it, returns the remainder (starting with
+/// `/`, or empty). Null when `root` is not a proper ancestor, which also rejects
+/// `/home/developer` for the root `/home/dev`.
+fn below(path: []const u8, root: []const u8) ?[]const u8 {
+    if (root.len == 0) return null;
+    if (!std.mem.startsWith(u8, path, root)) return null;
+    if (path.len == root.len) return "";
+    if (path[root.len] != '/') return null;
+    return path[root.len..];
+}
+
+fn baseName(path: []const u8) []const u8 {
+    std.debug.assert(path.len > 0);
+    if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| return path[slash + 1 ..];
+    return path;
 }
 
 fn append(out: []u8, at: usize, content: []const u8) usize {
@@ -93,88 +164,120 @@ fn trimTrailingSlashes(path: []const u8) []const u8 {
     return path[0..end];
 }
 
-fn expectDisplay(expected: []const u8, cwd: []const u8, keep: u8) !void {
+fn expectDisplay(expected: []const u8, input: Input) !void {
     var buffer: [max_display_bytes]u8 = undefined;
-    const actual = display(&buffer, cwd, "/home/dev", keep);
-    try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expectEqualStrings(expected, display(&buffer, input));
 }
 
 test "home itself collapses to a tilde" {
-    try expectDisplay("~", "/home/dev", 3);
+    try expectDisplay("~", .{ .cwd = "/home/dev", .home = "/home/dev" });
+    try expectDisplay("~", .{ .cwd = "/home/dev/", .home = "/home/dev" });
+    try expectDisplay("~", .{ .cwd = "/home/dev///", .home = "/home/dev" });
 }
 
-test "paths under home keep the tilde" {
-    try expectDisplay("~", "/home/dev/", 3);
-    try expectDisplay("~/src", "/home/dev/src", 3);
-    try expectDisplay("~/src/prompty", "/home/dev/src/prompty", 3);
-}
-
-test "the tilde counts as one of the kept components" {
-    // Three levels below home do not fit in three slots, because `~` takes one.
-    try expectDisplay("~/a/b", "/home/dev/a/b", 3);
-    try expectDisplay("…/a/b/c", "/home/dev/a/b/c", 3);
-    try expectDisplay("…/b/c/d", "/home/dev/a/b/c/d", 3);
-    // And with a single slot the marker is the first thing to go.
-    try expectDisplay("…/a", "/home/dev/a", 1);
-    try expectDisplay("~", "/home/dev", 1);
+test "paths under home keep the tilde until it stops fitting" {
+    try expectDisplay("~/src", .{ .cwd = "/home/dev/src", .home = "/home/dev" });
+    try expectDisplay("~/a/b", .{ .cwd = "/home/dev/a/b", .home = "/home/dev" });
+    // Three levels below home no longer fit in three slots: `~` takes one.
+    try expectDisplay("…/a/b/c", .{ .cwd = "/home/dev/a/b/c", .home = "/home/dev" });
+    try expectDisplay("…/b/c/d", .{ .cwd = "/home/dev/a/b/c/d", .home = "/home/dev" });
+    try expectDisplay("…/a", .{ .cwd = "/home/dev/a", .home = "/home/dev", .keep = 1 });
 }
 
 test "absolute paths count only their components" {
-    // The root slash is not a component, so three names still fit.
-    try expectDisplay("/usr/share/doc", "/usr/share/doc", 3);
-    try expectDisplay("…/share/doc/x", "/usr/share/doc/x", 3);
+    try expectDisplay("/usr/share/doc", .{ .cwd = "/usr/share/doc" });
+    try expectDisplay("…/share/doc/x", .{ .cwd = "/usr/share/doc/x" });
+    try expectDisplay("/usr", .{ .cwd = "/usr" });
+    try expectDisplay("/", .{ .cwd = "/" });
+    try expectDisplay("/", .{ .cwd = "" });
+}
+
+test "paths that merely look like home are not shortened" {
+    try expectDisplay("/home/developer", .{ .cwd = "/home/developer", .home = "/home/dev" });
+    try expectDisplay("/home/dev2/src", .{ .cwd = "/home/dev2/src", .home = "/home/dev" });
+    try expectDisplay("/usr/bin", .{ .cwd = "/usr/bin", .home = "/" });
+}
+
+test "inside a repository the label is anchored on the repository name" {
+    // The ancestors of the repository are hidden, so the symbol always shows.
+    try expectDisplay("…/prompty", .{
+        .cwd = "/home/dev/Projects/code/prompty",
+        .home = "/home/dev",
+        .repository_root = "/home/dev/Projects/code/prompty",
+    });
+    try expectDisplay("…/prompty/src", .{
+        .cwd = "/home/dev/Projects/code/prompty/src",
+        .home = "/home/dev",
+        .repository_root = "/home/dev/Projects/code/prompty",
+    });
+    try expectDisplay("…/prompty/src/domain", .{
+        .cwd = "/home/dev/Projects/code/prompty/src/domain",
+        .home = "/home/dev",
+        .repository_root = "/home/dev/Projects/code/prompty",
+    });
+    // Deeper than the window: the oldest components go, the symbol stays.
+    try expectDisplay("…/domain/and/deeper", .{
+        .cwd = "/home/dev/Projects/code/prompty/src/domain/and/deeper",
+        .home = "/home/dev",
+        .repository_root = "/home/dev/Projects/code/prompty",
+    });
+}
+
+test "repositories outside home are anchored the same way" {
+    try expectDisplay("…/prompty/src", .{
+        .cwd = "/srv/build/prompty/src",
+        .home = "/home/dev",
+        .repository_root = "/srv/build/prompty",
+    });
+}
+
+test "a repository root that is not an ancestor is ignored" {
+    try expectDisplay("~/src", .{
+        .cwd = "/home/dev/src",
+        .home = "/home/dev",
+        .repository_root = "/srv/build/prompty",
+    });
+    // A repository at the filesystem root has no name to anchor on.
+    try expectDisplay("/tmp", .{
+        .cwd = "/tmp",
+        .home = "/home/dev",
+        .repository_root = "/",
+    });
 }
 
 test "keep eight is enough for seven components under home" {
     var buffer: [max_display_bytes]u8 = undefined;
+    const home = "/home/dev";
     try std.testing.expectEqualStrings(
         "~/1/2/3/4/5/6/7",
-        display(&buffer, "/home/dev/1/2/3/4/5/6/7", "/home/dev", max_keep),
+        display(&buffer, .{ .cwd = home ++ "/1/2/3/4/5/6/7", .home = home, .keep = max_keep }),
     );
     try std.testing.expectEqualStrings(
         "…/1/2/3/4/5/6/7/8",
-        display(&buffer, "/home/dev/1/2/3/4/5/6/7/8", "/home/dev", max_keep),
+        display(&buffer, .{ .cwd = home ++ "/1/2/3/4/5/6/7/8", .home = home, .keep = max_keep }),
     );
-}
-
-test "deep paths keep only the last components" {
-    try expectDisplay("…/c/d", "/home/dev/a/b/c/d", 2);
-    try expectDisplay("…/b/c/d", "/home/dev/a/b/c/d", 3);
-    try expectDisplay("…/d", "/home/dev/a/b/d", 1);
-}
-
-test "paths outside home keep their root" {
-    try expectDisplay("/", "/", 3);
-    try expectDisplay("/usr", "/usr", 3);
-    try expectDisplay("/usr/share", "/usr/share", 3);
-    try expectDisplay("…/share/doc", "/usr/share/doc", 2);
-}
-
-test "paths that merely look like home are not shortened" {
-    try expectDisplay("/home/developer", "/home/developer", 3);
-    try expectDisplay("/home/dev2/src", "/home/dev2/src", 3);
-}
-
-test "relative and odd paths never produce an empty label" {
-    try expectDisplay("/", "", 3);
-    try expectDisplay("a/b", "a/b", 2);
-    try expectDisplay("~", "/home/dev///", 3);
 }
 
 test "unicode component names are preserved" {
-    try expectDisplay("~/ñandú/日本語", "/home/dev/ñandú/日本語", 3);
+    try expectDisplay("~/ñandú/日本語", .{
+        .cwd = "/home/dev/ñandú/日本語",
+        .home = "/home/dev",
+    });
 }
 
-test "keeping the maximum number of components works" {
-    var buffer: [max_display_bytes]u8 = undefined;
-    const deep = "/home/dev/1/2/3/4/5/6/7/8/9";
-    try std.testing.expectEqualStrings(
-        "…/2/3/4/5/6/7/8/9",
-        display(&buffer, deep, "/home/dev", max_keep),
-    );
+test "relative paths never produce an empty label" {
+    try expectDisplay("a/b", .{ .cwd = "a/b" });
+    try expectDisplay("…/b/c", .{ .cwd = "a/b/c", .keep = 2 });
 }
 
-test "home equal to root is not treated as home" {
-    var buffer: [max_display_bytes]u8 = undefined;
-    try std.testing.expectEqualStrings("/usr/bin", display(&buffer, "/usr/bin", "/", 3));
+test "repeated separators are not components" {
+    try expectDisplay("/usr/bin", .{ .cwd = "//usr///bin" });
+    try expectDisplay("~/a/b", .{ .cwd = "/home/dev//a///b", .home = "/home/dev" });
+}
+
+test "the anchor name is the last component of the repository root" {
+    try std.testing.expectEqualStrings("prompty", baseName("/home/dev/prompty"));
+    try std.testing.expectEqualStrings("x", baseName("/x"));
+    // A root without a separator still has a name.
+    try std.testing.expectEqualStrings("prompty", baseName("prompty"));
 }

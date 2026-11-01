@@ -47,16 +47,19 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     var working_directory_buffer: [path_mod.max_display_bytes]u8 = undefined;
     const working_directory = workingDirectory(host, &working_directory_buffer);
 
-    var display_buffer: [path_mod.max_display_bytes]u8 = undefined;
-    const home = host.environ.get("HOME") orelse "";
-    model.path = store.dupe(path_mod.display(
-        &display_buffer,
-        working_directory,
-        home,
-        options.keep_components,
-    ));
+    // The repository is looked up before the path is formatted: inside one, the
+    // label is anchored on its name rather than on home.
+    const repository = probeRepository(host, working_directory, store);
+    if (repository) |found| model.git = found.git;
 
-    if (gitProbe(host, working_directory, store)) |repository| model.git = repository;
+    var display_buffer: [path_mod.max_display_bytes]u8 = undefined;
+    model.path = store.dupe(path_mod.display(&display_buffer, .{
+        .cwd = working_directory,
+        .home = host.environ.get("HOME") orelse "",
+        .repository_root = if (repository) |found| found.root else null,
+        .keep = options.keep_components,
+    }));
+
     addLanguages(host, working_directory, store, &model);
 
     const unix_seconds = host.clock.now();
@@ -152,11 +155,22 @@ fn direnvActive(host: ports.Host) bool {
 }
 
 const Located = struct {
+    /// The worktree root: the directory that holds the `.git` entry.
+    root: []const u8,
     git_dir: []const u8,
     head: git_mod.Head,
 };
 
-fn gitProbe(host: ports.Host, working_directory: []const u8, store: *store_mod.Store) ?prompt.Git {
+const Probe = struct {
+    root: []const u8,
+    git: prompt.Git,
+};
+
+fn probeRepository(
+    host: ports.Host,
+    working_directory: []const u8,
+    store: *store_mod.Store,
+) ?Probe {
     var git_dir_buffer: [path_mod.max_display_bytes * 2]u8 = undefined;
     var head_buffer: [git_mod.max_head_bytes]u8 = undefined;
 
@@ -174,11 +188,14 @@ fn gitProbe(host: ports.Host, working_directory: []const u8, store: *store_mod.S
                 .detached => |commit| store.dupe(git_mod.short(commit)),
             };
             return .{
-                .branch = branch,
-                .operation = operation,
-                .detached = switch (located.head) {
-                    .named => false,
-                    .detached => true,
+                .root = located.root,
+                .git = .{
+                    .branch = branch,
+                    .operation = operation,
+                    .detached = switch (located.head) {
+                        .named => false,
+                        .detached => true,
+                    },
                 },
             };
         }
@@ -200,7 +217,7 @@ fn locate(
             const head = git_mod.parseHead(contents) orelse return null;
             const git_dir_path = join(&scratch, directory, ".git") orelse return null;
             const git_dir = copy(git_dir_buffer, git_dir_path) orelse return null;
-            return .{ .git_dir = git_dir, .head = head };
+            return .{ .root = directory, .git_dir = git_dir, .head = head };
         }
     }
 
@@ -219,7 +236,7 @@ fn locate(
     const head_path = join(&scratch, git_dir, "HEAD") orelse return null;
     const contents = host.files.read(head_path, head_buffer) orelse return null;
     const head = git_mod.parseHead(contents) orelse return null;
-    return .{ .git_dir = git_dir, .head = head };
+    return .{ .root = directory, .git_dir = git_dir, .head = head };
 }
 
 fn operationIn(host: ports.Host, git_dir: []const u8) git_mod.Operation {
@@ -467,7 +484,9 @@ test "collects every fact from a fake project" {
 
     try std.testing.expectEqualStrings("dev", model.user.?);
     try std.testing.expect(!model.is_root);
-    try std.testing.expectEqualStrings("~/proj", model.path);
+    // Inside a repository the label is anchored on the repository name, so the
+    // home prefix is replaced by the truncation symbol.
+    try std.testing.expectEqualStrings("…/proj", model.path);
     try std.testing.expectEqualStrings("main", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
     try std.testing.expect(!model.git.?.detached);

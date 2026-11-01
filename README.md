@@ -85,10 +85,22 @@ prompty version                                        print name and version
 
 ### Path truncation
 
-The same rule as starship's `truncation_length = 3`: keep the last three display
-components, and `~` is one of them, so `~/a/b/c` becomes `…/a/b/c` while
-`~/a/b` stays as it is. Absolute paths count only their names, because the root
-slash is not a component: `/usr/share/doc` fits, `/usr/share/doc/x` does not.
+The same rules as starship with `truncation_length = 3`, verified side by side
+over eighteen paths:
+
+| working directory | label |
+|---|---|
+| `~/plain/a` | `~/plain/a` |
+| `~/plain/a/b` | `…/plain/a/b` (the `~` counts as a component) |
+| `/usr/share/doc` | `/usr/share/doc` (the root slash does not count) |
+| `/usr/share/doc/x` | `…/share/doc/x` |
+| repo at `~/Projects/code/prompty`, cwd = repo root | `…/prompty` |
+| … cwd = `src/domain` | `…/prompty/src/domain` |
+| … cwd = `src/domain/deep/er` | `…/domain/deep/er` |
+
+Inside a repository the label is anchored on the repository name — that is
+starship's `truncate_to_repo`, which is on by default — so the ancestors above
+the repository are replaced by `…/`.
 
 ### What it deliberately does not do
 
