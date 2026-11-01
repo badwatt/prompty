@@ -9,10 +9,10 @@ first, and the floor is not in this program:
 | measurement, this machine, fork+exec included | median |
 | --- | --- |
 | a 4.8 KiB static binary that does nothing but exit | **0.85 ms** |
-| prompty, no repository (`render --no-git-status`) | 0.97 ms |
-| prompty, empty directory | 0.97 ms |
-| prompty, directory with 20,000 entries | 0.99 ms |
-| prompty, this repository, `git status` on | 4.5 ms |
+| prompty, no repository (`render --no-git-status`) | 0.95 ms |
+| prompty, empty directory | 0.92 ms |
+| prompty, directory with 20,000 entries | 0.92 ms |
+| prompty, this repository, `git status` on | 4.3 ms |
 | `git status --porcelain=v2 --branch` alone | 3.5 ms |
 | `git rev-parse --abbrev-ref HEAD` alone | 1.9 ms |
 
@@ -30,7 +30,7 @@ every tracked file. Measured with `GIT_TRACE_PERFORMANCE=1`: 1.0 ms of refresh,
 
 The budget, in order of what actually costs:
 
-1. **Process startup.** A 60 KiB static binary, no libc, no allocator, no
+1. **Process startup.** A 68 KiB static binary, no libc, no allocator, no
    dynamic linking. The 12 MiB debug build costs 0.4 ms more per prompt purely
    in page faults, which is why `zig build` defaults to ReleaseFast and strips.
 2. **The one subprocess.** Only inside a repository. Three of the four flags
