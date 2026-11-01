@@ -229,8 +229,12 @@ fn paddingFor(
     const needed_columns = used_columns + label_width;
     var wanted: usize = 0;
     if (columns) |total| {
-        const total_columns: usize = total;
-        if (needed_columns < total_columns) wanted = total_columns - needed_columns;
+        // One column is left free at the right edge. A line that fills the last
+        // cell leaves the terminal in "wrap pending", and the first character
+        // typed then lands at the start of the next line instead of after the
+        // prompt; with the cell free the cursor waits where the typing goes.
+        const target: usize = if (total > 1) total - 1 else 0;
+        if (needed_columns < target) wanted = target - needed_columns;
     }
     const needed_bytes = used_bytes + label_width;
     const available = if (room > needed_bytes) room - needed_bytes else 0;
@@ -679,7 +683,7 @@ test "the buffer bound is never exceeded by a maximal prompt" {
     );
 }
 
-test "the right-aligned duration ends at the right edge in bold milliseconds" {
+test "the right-aligned duration ends one column short, in bold milliseconds" {
     const model = Model{
         .theme = fixtureTheme(),
         .color = false,
@@ -691,9 +695,10 @@ test "the right-aligned duration ends at the right edge in bold milliseconds" {
     };
     const rendered = renderToString(&model);
 
-    // The line, then the padding, then the number: 40 columns exactly.
+    // The line, then the padding, then the number: one column short of the 40,
+    // which is where the cursor waits for typing.
     const line = rendered[1..]; // skip the leading newline
-    try std.testing.expectEqual(@as(usize, 40), width_mod.utf8(line));
+    try std.testing.expectEqual(@as(usize, 39), width_mod.utf8(line));
     try std.testing.expect(std.mem.endsWith(u8, line, "1234ms"));
     // Milliseconds, not the human form, and not twice.
     try std.testing.expect(std.mem.indexOf(u8, line, "1.2s") == null);
@@ -769,7 +774,7 @@ test "the inline placement never pads and the right one never doubles" {
     try std.testing.expect(std.mem.indexOf(u8, renderToString(&right), "1.2s") == null);
 }
 
-test "a wide terminal is padded to its edge" {
+test "a wide terminal is padded to one column short of its edge" {
     for ([_]u16{ 200, 600, 2_000 }) |columns| {
         const model = Model{
             .theme = fixtureTheme(),
@@ -781,7 +786,9 @@ test "a wide terminal is padded to its edge" {
         };
         const rendered = renderToString(&model);
         try std.testing.expect(std.mem.endsWith(u8, rendered, "5ms"));
-        try std.testing.expectEqual(@as(usize, columns), width_mod.utf8(rendered[1..]));
+        // One column short of the edge, so the cursor has somewhere to wait for
+        // the first character typed.
+        try std.testing.expectEqual(@as(usize, columns - 1), width_mod.utf8(rendered[1..]));
     }
 }
 

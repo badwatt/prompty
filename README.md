@@ -122,9 +122,12 @@ milliseconds, ending at the last column of the terminal.
  badwatt  …/prompty  main !  14:32 ❯                                   1234ms
 ```
 
-It replaces the dimmed `1.2s`, so the number is never shown twice. The width
-comes from `$COLUMNS`, which the generated integration passes on the command
-line — a prompt's stdout is a pipe and cannot be asked. A terminal that does not
+It replaces the dimmed `1.2s`, so the number is never shown twice. The line stops
+one column short of the edge on purpose: a prompt that fills the last cell leaves
+the terminal waiting to wrap, and the first character typed then jumps to the
+next line instead of following the prompt. The width comes from `$COLUMNS`, which
+the generated integration passes on the command line — a prompt's stdout is a
+pipe and cannot be asked. A terminal that does not
 report its width and a shell that does not export the variable mean no padding
 rather than a guessed one, and a prompt already wider than the terminal is left
 alone rather than wrapped.

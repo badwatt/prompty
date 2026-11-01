@@ -172,10 +172,14 @@ bytes. `domain/width.zig` is the part of `wcwidth` a prompt needs — wide range
 combining marks, control characters — and `Canvas` counts columns as it writes,
 ignoring the escape sequences it emits for itself.
 
-Two consequences worth stating: a line already wider than the terminal gets no
-padding (wrapping a prompt corrupts the redraw, and the number is not worth it),
-and the segment is bold but not coloured by severity — the yellow is the point,
-and the escalation logic already lives in the dimmed placement.
+Three consequences worth stating. The line stops **one column short**: a prompt
+whose last cell is filled leaves the terminal in "wrap pending", and the first
+character typed lands at the start of the next line — measured in a real terminal
+(ninety-nine columns keeps the typing on the line; a hundred does not). A line
+already wider than the terminal gets no padding at all, because wrapping a prompt
+corrupts the redraw and the number is not worth it. And the segment is bold but
+not coloured by severity: the yellow is the point, and the escalation logic
+already lives in the dimmed placement.
 
 Timing is the shell's half, and it had to be fixed to make any of this visible:
 zsh computes the difference in floating point, so it was passing
