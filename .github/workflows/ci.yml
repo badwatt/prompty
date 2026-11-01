@@ -19,3 +19,19 @@ jobs:
         run: zig build fmt:check
       - name: Tests
         run: zig build test --summary all
+      - name: Every command, in the shipping build
+        run: zig build smoke
+      - name: A render on a 64 KiB stack
+        run: zig build stack
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: mlugg/setup-zig@v2
+      - name: Install kcov
+        run: sudo apt-get update && sudo apt-get install -y kcov
+      # The project's rule is 100% of lines, and it used to be enforced only on
+      # the machine of whoever remembered to run it.
+      - name: Coverage
+        run: zig build coverage -Dkcov="$(command -v kcov)"

@@ -296,9 +296,8 @@ test "property: any bytes are parsed, never indexed past" {
     const random = prng.random();
     var buffer: [512]u8 = undefined;
     const pieces = [_][]const u8{
-        "# branch.head ", "main", "\x00", "1 M. N... ", "2 R. ", "? f", "u UU ",
-        "# branch.ab +1 -2", "# branch.oid ", "(detached)", "\x00\x00", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-        "# branch.head (detached)", "\xff\xfe",
+        "# branch.head ",    "main",          "\x00",       "1 M. N... ", "2 R. ",                                    "? f",                      "u UU ",
+        "# branch.ab +1 -2", "# branch.oid ", "(detached)", "\x00\x00",   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "# branch.head (detached)", "\xff\xfe",
     };
 
     for (0..4000) |_| {

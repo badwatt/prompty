@@ -60,6 +60,29 @@ pub fn build(b: *std.Build) void {
     const fmt_check = b.addFmt(.{ .paths = &source_paths, .check = true });
     fmt_check_step.dependOn(&fmt_check.step);
 
+    // A prompt runs on the shell's own stack, so its memory budget is a
+    // property of the whole program, not of any one function. A limit of 64 KiB
+    // is the smallest a shell may hand us, and the only way to notice a buffer
+    // that grew back into the megabytes.
+    const stack_step = b.step("stack", "Render under a 64 KiB stack");
+    const stack_check = b.addSystemCommand(&.{ "sh", "-c", "ulimit -s 64 && exec \"$0\" render > /dev/null" });
+    stack_check.addFileArg(exe.getEmittedBin());
+    stack_check.has_side_effects = true;
+    stack_step.dependOn(&stack_check.step);
+
+    // The shipping configuration is ReleaseFast, where assertions are gone.
+    // Running each command in it catches a program that only works in Debug.
+    const smoke_step = b.step("smoke", "Run every command in the shipping build");
+    const smoke = b.addSystemCommand(&.{
+        "sh",
+        "-c",
+        "for arguments in version help theme 'init zsh' 'init bash' 'render --no-color' 'render --shell=zsh' 'render --shell=bash' 'theme detect'; do " ++
+            "\"$0\" $arguments > /dev/null 2>&1 || { echo \"failed: $arguments\"; exit 1; }; done",
+    });
+    smoke.addFileArg(exe.getEmittedBin());
+    smoke.has_side_effects = true;
+    smoke_step.dependOn(&smoke.step);
+
     const run_step = b.step("run", "Run prompty");
     const run_command = b.addRunArtifact(exe);
     run_command.step.dependOn(b.getInstallStep());

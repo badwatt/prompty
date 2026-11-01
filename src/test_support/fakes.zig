@@ -165,9 +165,15 @@ pub const FakeOutput = struct {
 
 pub const FakeCommand = struct {
     response: ?[]const u8 = null,
-    /// The last argument vector, joined for easy assertions.
-    last_argv: []const u8 = "",
+    /// The last argument vector, joined with spaces, so a test can ask what the
+    /// program was actually run with.
+    argv_buffer: [256]u8 = undefined,
+    argv_length: usize = 0,
     calls: usize = 0,
+
+    pub fn lastArgv(self: *const FakeCommand) []const u8 {
+        return self.argv_buffer[0..self.argv_length];
+    }
 
     pub fn command(self: *FakeCommand) ports.Command {
         return .{ .ptr = self, .vtable = &vtable };
@@ -175,10 +181,19 @@ pub const FakeCommand = struct {
 
     const vtable = ports.Command.VTable{ .run = run };
 
-    fn run(ptr: *anyopaque, argv: []const [:0]const u8, stdout: []u8) ?[]const u8 {
+    fn run(ptr: *anyopaque, arguments: []const [:0]const u8, stdout: []u8) ?[]const u8 {
         const self: *FakeCommand = @ptrCast(@alignCast(ptr));
         self.calls += 1;
-        if (argv.len > 0) self.last_argv = argv[0];
+        self.argv_length = 0;
+        for (arguments, 0..) |argument, index| {
+            if (self.argv_length + argument.len + 1 > self.argv_buffer.len) break;
+            if (index > 0) {
+                self.argv_buffer[self.argv_length] = ' ';
+                self.argv_length += 1;
+            }
+            @memcpy(self.argv_buffer[self.argv_length..][0..argument.len], argument);
+            self.argv_length += argument.len;
+        }
         const response = self.response orelse return null;
         const length = @min(response.len, stdout.len);
         @memcpy(stdout[0..length], response[0..length]);

@@ -127,6 +127,12 @@ pub const Runner = struct {
         program: []const u8,
         arguments: [*:null]const ?[*:0]const u8,
     ) noreturn {
+        // The child inherits the parent's signal mask, and the parent blocks
+        // signals while it talks to the terminal. A git that inherited that
+        // mask could not be interrupted, so the mask is cleared before exec.
+        var empty = posix.sigemptyset();
+        posix.sigprocmask(posix.SIG.SETMASK, &empty, null);
+
         const dev_null = linux.open("/dev/null", .{ .ACCMODE = .RDWR }, 0);
         if (linux.errno(dev_null) == .SUCCESS) {
             _ = linux.dup2(@intCast(dev_null), posix.STDIN_FILENO);
@@ -206,6 +212,27 @@ test "a failed fork is a failure, never a pid of minus one" {
     try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -1))));
     try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -12))));
     try std.testing.expectEqual(@as(?linux.pid_t, 4242), Runner.childPid(4242));
+}
+
+test "a child does not inherit a blocked signal" {
+    // The prompt blocks SIGINT..SIGHUP while it queries the terminal; a command
+    // started in that window must still be interruptible.
+    var blocked = posix.sigemptyset();
+    posix.sigaddset(&blocked, .USR1);
+    var saved: posix.sigset_t = undefined;
+    posix.sigprocmask(posix.SIG.BLOCK, &blocked, &saved);
+    defer posix.sigprocmask(posix.SIG.SETMASK, &saved, null);
+
+    var runner = testRunner(null);
+    var output: [128]u8 = undefined;
+    const result = runner.command().run(
+        // Shell builtins only: a test may not depend on where this machine
+        // keeps its coreutils.
+        &.{ "/bin/sh", "-c", "while read -r key value; do case $key in SigBlk:) echo \"$value\";; esac; done < /proc/self/status" },
+        &output,
+    ).?;
+    // "SigBlk:\t0000000000000000" — nothing blocked on entry.
+    try std.testing.expect(std.mem.endsWith(u8, std.mem.trimEnd(u8, result, "\n"), "0000000000000000"));
 }
 
 test "a child cannot talk over the prompt or read the keyboard" {
