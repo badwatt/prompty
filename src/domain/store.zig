@@ -22,8 +22,19 @@ pub const Store = struct {
     /// newline in a directory name or a branch must not be able to start what
     /// looks like a new prompt line.
     pub fn dupePrintable(self: *Store, text: []const u8) []const u8 {
-        const slice = self.claim(text.len);
-        for (text, 0..) |byte, index| {
+        return self.dupeDisplay(text, text.len);
+    }
+
+    /// `dupePrintable`, but at most `max_bytes` of it, cut on a character
+    /// boundary. A name from the environment has no length limit, and one long
+    /// enough would otherwise take the whole prompt line for itself.
+    pub fn dupeDisplay(self: *Store, text: []const u8, max_bytes: usize) []const u8 {
+        var length = @min(text.len, max_bytes);
+        while (length > 0 and length < text.len and (text[length] & 0xc0) == 0x80) {
+            length -= 1;
+        }
+        const slice = self.claim(length);
+        for (text[0..slice.len], 0..) |byte, index| {
             slice[index] = if (byte < 0x20 or byte == 0x7f) '?' else byte;
         }
         return slice;
@@ -31,15 +42,19 @@ pub const Store = struct {
 
     pub fn dupe(self: *Store, text: []const u8) []const u8 {
         const slice = self.claim(text.len);
-        @memcpy(slice, text);
+        @memcpy(slice, text[0..slice.len]);
         return slice;
     }
 
+    /// Hands out as much of the remaining space as `length` asks for, and less
+    /// when the store is full. Overflow used to be an assertion, and the release
+    /// build compiles assertions away: an over-long environment variable then
+    /// wrote past the end of the store. Clamping keeps the prompt whole, and
+    /// every caller renders whatever slice it is given.
     pub fn claim(self: *Store, length: usize) []u8 {
-        // Overflow is a programming error: the caller must bound its input.
-        std.debug.assert(self.used + length <= capacity);
-        const slice = self.bytes[self.used..][0..length];
-        self.used += length;
+        const granted = @min(length, capacity - self.used);
+        const slice = self.bytes[self.used..][0..granted];
+        self.used += granted;
         return slice;
     }
 };
@@ -94,9 +109,33 @@ test "capacity is enough for a maximal prompt" {
     // A full-size path plus every other slice a render needs, with room left.
     const long_path: [4096]u8 = @splat('x');
     const long_branch: [256]u8 = @splat('y');
-    const versions: [5 * 32]u8 = @splat('z');
     _ = store.dupe(&long_path);
     _ = store.dupe(&long_branch);
-    _ = store.dupe(&versions);
     try std.testing.expect(store.used < Store.capacity);
+}
+
+test "a claim larger than the store is clipped, not written past it" {
+    // An environment variable is whatever the parent process left there, so the
+    // store cannot trust a caller's length: it used to be a plain assertion,
+    // which the release build compiles away.
+    var store: Store = undefined;
+    store.reset();
+    const granted = store.claim(Store.capacity + 100);
+    try std.testing.expectEqual(@as(usize, Store.capacity), granted.len);
+    try std.testing.expectEqual(@as(usize, Store.capacity), store.used);
+    // And once full it keeps handing out nothing rather than going backwards.
+    try std.testing.expectEqual(@as(usize, 0), store.claim(1).len);
+    try std.testing.expectEqual(@as(usize, 0), store.dupe("x").len);
+}
+
+test "a display name is cut short on a character boundary" {
+    var store: Store = undefined;
+    store.reset();
+    // "ñ" is two bytes: a cut that lands inside one has to step back, or the
+    // prompt would carry an invalid sequence to the terminal.
+    try std.testing.expectEqualStrings("", store.dupeDisplay("ñandú", 1));
+    try std.testing.expectEqualStrings("ñ", store.dupeDisplay("ñandú", 2));
+    try std.testing.expectEqualStrings("ña", store.dupeDisplay("ñandú", 3));
+    try std.testing.expectEqualStrings("ñandú", store.dupeDisplay("ñandú", 64));
+    try std.testing.expectEqualStrings("a?b", store.dupeDisplay("a\nb", 64));
 }

@@ -45,7 +45,7 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
         .path = "/",
     };
     if (host.environ.get("USER") orelse host.environ.get("LOGNAME")) |user| {
-        model.user = store.dupePrintable(user);
+        model.user = store.dupeDisplay(user, prompt.max_user_bytes);
     }
     model.is_root = host.user_id == 0;
 
@@ -444,6 +444,21 @@ test "collects every fact from a fake project" {
     try std.testing.expectEqualStrings("main", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
     try std.testing.expect(!model.git.?.detached);
+}
+
+test "an absurdly long user name cannot take over the line" {
+    // `$USER` is whatever the parent process left there. The store and the
+    // canvas now stop at their bounds, but a name that long would still push
+    // the path, the branch and the clock off the line.
+    const long_name: [1000]u8 = @splat('u');
+    var harness = FakeHarness.init(&.{
+        .{ "USER", &long_name },
+        .{ "HOME", "/home/dev" },
+        .{ "PWD", "/home/dev/proj" },
+    });
+    const model = harness.model(.{});
+    try std.testing.expectEqual(prompt.max_user_bytes, model.user.?.len);
+    try std.testing.expectEqualStrings("…/proj", model.path);
 }
 
 test "a root shell is marked and can be rendered" {

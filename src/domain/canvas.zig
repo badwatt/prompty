@@ -40,8 +40,10 @@ pub const Shell = enum {
 };
 
 pub const Canvas = struct {
-    /// A prompt is a few hundred bytes; 1024 leaves room for a maximal path,
-    /// every segment and every escape sequence with margin to spare.
+    /// A maximal prompt is about 1 KiB: a clipped path, a branch, every marker
+    /// and a truecolor sequence per segment. 2048 leaves room for all of that
+    /// with margin, and `zig build test` checks the bound with every field at
+    /// its maximum.
     pub const capacity = 2048;
 
     buffer: []u8,
@@ -97,10 +99,18 @@ pub const Canvas = struct {
         self.raw(content[start..]);
     }
 
+    /// Appends to the buffer and stops at its end. The guard used to be an
+    /// assertion, which the release build compiles away: a name longer than the
+    /// prompt then wrote past the buffer and the prompt printed whatever
+    /// followed it from the stack.
     fn raw(self: *Canvas, content: []const u8) void {
-        std.debug.assert(self.len + content.len <= self.buffer.len);
-        @memcpy(self.buffer[self.len..][0..content.len], content);
-        self.len += content.len;
+        const room = self.buffer.len - self.len;
+        var taken = @min(content.len, room);
+        if (taken < content.len) {
+            while (taken > 0 and (content[taken] & 0xc0) == 0x80) taken -= 1;
+        }
+        @memcpy(self.buffer[self.len..][0..taken], content[0..taken]);
+        self.len += taken;
     }
 };
 
@@ -151,6 +161,26 @@ test "escapeFmt renders truecolor" {
     canvas.escapeFmt("\x1b[38;2;{d};{d};{d}m", .{ 10, 20, 30 });
     canvas.text("x");
     try std.testing.expectEqualStrings("\x1b[38;2;10;20;30mx", canvas.bytes());
+}
+
+test "text past the end of the buffer is dropped, not written" {
+    var buffer: [8]u8 = undefined;
+    var canvas = Canvas.init(&buffer, .plain, true);
+    canvas.text("abcdefgh");
+    canvas.text("ijkl");
+    try std.testing.expectEqualStrings("abcdefgh", canvas.bytes());
+    // And the same bound holds when every character has to be quoted.
+    var quoted = Canvas.init(&buffer, .zsh, true);
+    quoted.text("%%%%%%");
+    try std.testing.expectEqualStrings("%%%%%%%%", quoted.bytes());
+}
+
+test "a cut at the end of the buffer does not split a character" {
+    var buffer: [2]u8 = undefined;
+    var canvas = Canvas.init(&buffer, .plain, true);
+    canvas.text("a\u{00f1}"); // 'a' then a two-byte character
+    try std.testing.expectEqualStrings("a", canvas.bytes());
+    try std.testing.expect(std.unicode.utf8ValidateSlice(canvas.bytes()));
 }
 
 test "text at the very end of the buffer is quoted correctly" {

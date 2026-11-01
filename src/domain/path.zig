@@ -124,11 +124,11 @@ fn assemble(out: []u8, parts: Parts) []const u8 {
     for (tail[0..tail_length], 0..) |component, position| {
         if (position > 0) written = clip(out, written, "/");
         if (written + component.len > out.len) {
-            // A single name can be longer than the whole budget. Keep the room
-            // for the marker, so the label says it was cut instead of ending
-            // mid-word.
-            written = clip(out[0 .. out.len - ellipsis.len], written, component);
-            written = clip(out, written, ellipsis);
+            // The name does not fit. Take the room for the marker back instead
+            // of assuming the separator left it: a component can end flush with
+            // the end of the buffer, and then the marker has to replace its
+            // tail.
+            written = clip(out, cutBackForMarker(out, written), ellipsis);
             break;
         }
         written = clip(out, written, component);
@@ -168,6 +168,14 @@ fn baseName(path: []const u8) []const u8 {
     return path;
 }
 
+/// The largest offset at or before `at` that leaves room for the truncation
+/// marker and does not split a UTF-8 character.
+fn cutBackForMarker(out: []const u8, at: usize) usize {
+    var cut = @min(at, out.len - ellipsis.len);
+    while (cut > 0 and (out[cut] & 0xc0) == 0x80) cut -= 1;
+    return cut;
+}
+
 /// Copies as much of `content` as fits, never past the end of `out` and never
 /// through the middle of a UTF-8 character, and returns the new length.
 ///
@@ -175,14 +183,14 @@ fn baseName(path: []const u8) []const u8 {
 /// it. This is not a defensive nicety — with the safety checks off, an
 /// over-long path wrote past the buffer and corrupted the stack.
 fn clip(out: []u8, at: usize, content: []const u8) usize {
-    std.debug.assert(at <= out.len);
-    const room = out.len - at;
+    const start = @min(at, out.len);
+    const room = out.len - start;
     var length = @min(content.len, room);
     if (length < content.len) {
         while (length > 0 and (content[length] & 0xc0) == 0x80) length -= 1;
     }
-    @memcpy(out[at..][0..length], content[0..length]);
-    return at + length;
+    @memcpy(out[start..][0..length], content[0..length]);
+    return start + length;
 }
 
 fn trimTrailingSlashes(path: []const u8) []const u8 {
@@ -353,6 +361,34 @@ test "three long components are all bounded" {
     var cwd: [1024]u8 = undefined;
     const path = try std.fmt.bufPrint(&cwd, "/home/dev/{s}/{s}/{s}", .{ &long, &long, &long });
     try expectBounded(.{ .cwd = path, .home = "/home/dev" });
+}
+
+test "a component that ends flush with the buffer still leaves room for the mark" {
+    // The first name fills the budget exactly, so the second one has nowhere to
+    // go and the marker has to take its place. Assuming there was room for it
+    // ran the copy past the end of the buffer.
+    var cwd: [max_display_bytes + 8]u8 = undefined;
+    cwd[0] = '/';
+    @memset(cwd[1..max_display_bytes], 'a');
+    cwd[max_display_bytes] = '/';
+    cwd[max_display_bytes + 1] = 'b';
+
+    var out: [max_display_bytes]u8 = undefined;
+    const label = display(&out, .{ .cwd = cwd[0 .. max_display_bytes + 2] });
+    try std.testing.expectEqual(@as(usize, max_display_bytes), label.len);
+    try std.testing.expect(std.mem.endsWith(u8, label, ellipsis));
+    try std.testing.expect(std.unicode.utf8ValidateSlice(label));
+}
+
+test "the room for the mark is taken back to a character boundary" {
+    var out: [max_display_bytes]u8 = undefined;
+    @memset(&out, 'a');
+    // A two-byte character straddling the limit: its continuation byte sits
+    // where the marker would start, so the cut has to step back one more byte.
+    const limit = out.len - ellipsis.len;
+    out[limit - 1] = 0xc3;
+    out[limit] = 0xb1;
+    try std.testing.expectEqual(limit - 1, cutBackForMarker(&out, out.len));
 }
 
 test "a label that fills the budget exactly is not marked as cut" {

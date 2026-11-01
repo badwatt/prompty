@@ -27,6 +27,11 @@ pub const Git = struct {
     status: git_status_mod.Status = .{},
 };
 
+/// The longest user name the prompt shows. A login name is short; anything
+/// longer came from an environment a prompt cannot trust, and would push the
+/// path, the branch and the clock off the line.
+pub const max_user_bytes = 64;
+
 pub const Model = struct {
     theme: theme_mod.Theme,
     shell: Shell = .plain,
@@ -566,7 +571,7 @@ test "the buffer bound is never exceeded by a maximal prompt" {
     // zsh's escape wrappers around each sequence.
     var path_buffer: [path_mod.max_display_bytes]u8 = @splat('a');
     var branch_buffer: [git_mod.max_head_bytes]u8 = @splat('b');
-    const user_buffer: [64]u8 = @splat('u');
+    const user_buffer: [max_user_bytes]u8 = @splat('u');
 
     const model = Model{
         .theme = fixtureTheme(),
