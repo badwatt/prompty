@@ -110,7 +110,16 @@ The background has to be *known*, and asking the terminal is a round trip. So:
 3. If neither exists, the tuned default is used: a prompt never blocks.
 
 `theme detect` has a 100 ms poll timeout, so a terminal that does not answer
-costs a shell start nothing, and a second run is a no-op unless forced.
+costs one pause at shell start, and a second run is a no-op unless forced.
+
+The query itself has to be careful. A tty in its default state echoes the
+answer onto the screen and buffers it until a newline that never comes, so the
+reply shows up as garbage and, worse, stays in the input queue where the shell
+reads it as typed input. The detector therefore saves the terminal state, turns
+off echo and canonical input, reads until the reply's terminator so that no byte
+is left behind, and restores the state on every path out. The tests use a real
+pseudo-terminal for this, because the part that can go wrong is exactly the
+terminal state, and a pipe has none.
 
 ## Shell escaping
 

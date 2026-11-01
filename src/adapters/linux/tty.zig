@@ -1,9 +1,20 @@
 //! Terminal adapter: asks the controlling terminal for its background colour
-//! with an OSC 11 query, with a hard timeout so a terminal that does not answer
-//! can never hang a shell.
+//! with an OSC 11 query.
 //!
-//! Tests inject an already-open file descriptor (a pipe end), which exercises
-//! every line of the request/reply path without needing a pseudo-terminal.
+//! The query is only safe if the terminal is put in a quiet mode first. A tty
+//! left in its default state *echoes* the answer onto the screen and holds it
+//! in canonical buffering until a newline arrives — the reply then shows up as
+//! garbage, and worse, stays in the input queue where the shell will read it as
+//! if the user had typed it. So the adapter:
+//!
+//! 1. saves the terminal state and turns off echo and canonical input,
+//! 2. writes the query,
+//! 3. reads until the reply's terminator or a deadline, so nothing is left
+//!    behind,
+//! 4. restores the terminal state on every path out.
+//!
+//! It never runs on the prompt path: `prompty theme detect` calls it once and
+//! the answer is cached.
 
 const std = @import("std");
 const linux = std.os.linux;
@@ -12,15 +23,14 @@ const posix = std.posix;
 const ports = @import("../../ports/host.zig");
 
 pub const Tty = struct {
-    /// The controlling terminal, opened lazily so that `--help` never touches
-    /// the tty.
+    /// The controlling terminal, opened only when detection is requested.
     device_path: []const u8 = "/dev/tty",
 
-    /// Set by tests: the descriptor to use instead of opening the device.
-    preset_fd: ?posix.fd_t = null,
-
-    /// A terminal that has not answered in this long is not going to.
+    /// A terminal that has not answered by now is not going to.
     pub const timeout_ms: i32 = 100;
+
+    /// A reply that needs more reads than this is not a reply.
+    const max_reads = 32;
 
     /// The reply is at most `ESC ] 11 ; rgb:ffff/ffff/ffff ESC \`.
     pub const reply_capacity = 128;
@@ -42,91 +52,224 @@ pub const Tty = struct {
         const self: *const Tty = @ptrCast(@alignCast(ptr));
         std.debug.assert(buffer.len >= reply_capacity);
 
-        const fd = self.preset_fd orelse
-            (posix.openat(linux.AT.FDCWD, self.device_path, .{
-                .ACCMODE = .RDWR,
-                .CLOEXEC = true,
-            }, 0) catch return null);
-        const owned = self.preset_fd == null;
-        defer if (owned) {
-            _ = linux.close(fd);
-        };
+        const device = posix.openat(linux.AT.FDCWD, self.device_path, .{
+            .ACCMODE = .RDWR,
+            .NOCTTY = true,
+            .CLOEXEC = true,
+        }, 0) catch return null;
+        defer _ = linux.close(device);
 
-        const written = linux.write(fd, query.ptr, query.len);
+        // Without a terminal there is nothing to ask, and pretending otherwise
+        // would write a query into whatever the descriptor happens to be.
+        const quiet = enterQuietMode(device) orelse return null;
+        defer posix.tcsetattr(device, .NOW, quiet.saved) catch {};
+
+        const written = linux.write(device, query.ptr, query.len);
         if (linux.errno(written) != .SUCCESS) return null;
         if (written != query.len) return null;
 
-        var descriptors = [_]linux.pollfd{.{
-            .fd = fd,
-            .events = linux.POLL.IN,
-            .revents = 0,
-        }};
-        const ready = linux.poll(&descriptors, descriptors.len, timeout_ms);
-        if (linux.errno(ready) != .SUCCESS) return null;
-        if (ready == 0) return null;
+        return readReply(device, buffer);
+    }
 
-        const received = posix.read(fd, buffer) catch return null;
-        if (received == 0) return null;
-        return buffer[0..received];
+    const Quiet = struct { saved: posix.termios };
+
+    /// Echo off, canonical off: the reply must not be shown and must not wait
+    /// for a newline that will never come.
+    fn enterQuietMode(device: posix.fd_t) ?Quiet {
+        const saved = posix.tcgetattr(device) catch return null;
+        var quiet = saved;
+        quiet.lflag.ECHO = false;
+        quiet.lflag.ECHONL = false;
+        quiet.lflag.ICANON = false;
+        quiet.iflag.ICRNL = false;
+        posix.tcsetattr(device, .NOW, quiet) catch return null;
+        return .{ .saved = saved };
+    }
+
+    /// Reads until the reply is complete, so that no byte of it is left in the
+    /// terminal's input queue for the shell to read as typed input.
+    fn readReply(device: posix.fd_t, buffer: []u8) ?[]const u8 {
+        var filled: usize = 0;
+        var complete = false;
+        var reads: u8 = 0;
+        // A reply arrives in one piece in practice; the bound exists so that a
+        // talkative terminal cannot spin here.
+        while (reads < max_reads and !complete) : (reads += 1) {
+            std.debug.assert(filled < buffer.len);
+            var descriptors = [_]linux.pollfd{.{
+                .fd = device,
+                .events = linux.POLL.IN,
+                .revents = 0,
+            }};
+            const ready = linux.poll(&descriptors, descriptors.len, timeout_ms);
+            if (linux.errno(ready) != .SUCCESS or ready == 0) break;
+
+            const received = posix.read(device, buffer[filled..]) catch 0;
+            if (received == 0) break;
+            filled += received;
+            complete = isComplete(buffer[0..filled]);
+        }
+        // A partial reply cannot be trusted, and leaving it in the queue is
+        // exactly the failure this function exists to avoid.
+        if (!complete) return null;
+        return buffer[0..filled];
+    }
+
+    /// The reply ends with BEL or with ST (`ESC \\`).
+    fn isComplete(reply: []const u8) bool {
+        if (reply.len == 0) return false;
+        if (reply[reply.len - 1] == 0x07) return true;
+        return reply.len >= 2 and reply[reply.len - 2] == 0x1b and reply[reply.len - 1] == '\\';
     }
 };
 
-/// A socket pair behaves like a terminal: bidirectional, so the adapter can
-/// both ask its question and read the answer on the same descriptor.
-fn socketPair() ![2]posix.fd_t {
-    var sockets: [2]posix.fd_t = undefined;
-    const rc = linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM, 0, &sockets);
-    if (linux.errno(rc) != .SUCCESS) return error.SkipZigTest;
-    return sockets;
+// ---------------------------------------------------------------------------
+// Tests. A real pseudo-terminal is used rather than a pipe: the whole point of
+// this adapter is how it drives the terminal, and a pipe has no terminal state
+// to get wrong.
+// ---------------------------------------------------------------------------
+
+const TIOCSPTLCK = 0x40045431;
+const TIOCGPTN = 0x80045430;
+
+const Pty = struct {
+    master: posix.fd_t,
+    slave: posix.fd_t,
+    number: u32,
+
+    fn open() Pty {
+        // A pseudo-terminal is a hard requirement of these tests: skipping
+        // instead would silently drop the coverage of the quiet-mode code,
+        // which is the part that must not break.
+        const master = posix.openat(linux.AT.FDCWD, "/dev/ptmx", .{
+            .ACCMODE = .RDWR,
+            .NOCTTY = true,
+            .CLOEXEC = true,
+        }, 0) catch unreachable;
+
+        var unlock: i32 = 0;
+        std.debug.assert(linux.errno(linux.ioctl(master, TIOCSPTLCK, @intFromPtr(&unlock))) == .SUCCESS);
+        var number: u32 = 0;
+        std.debug.assert(linux.errno(linux.ioctl(master, TIOCGPTN, @intFromPtr(&number))) == .SUCCESS);
+
+        var name: [32]u8 = undefined;
+        const device_path = std.fmt.bufPrint(&name, "/dev/pts/{d}", .{number}) catch unreachable;
+        const slave = posix.openat(linux.AT.FDCWD, device_path, .{
+            .ACCMODE = .RDWR,
+            .NOCTTY = true,
+            .CLOEXEC = true,
+        }, 0) catch unreachable;
+        return .{ .master = master, .slave = slave, .number = number };
+    }
+
+    /// The device path, formatted into the caller's buffer so that the caller
+    /// controls the lifetime.
+    fn path(self: Pty, buffer: []u8) []const u8 {
+        return std.fmt.bufPrint(buffer, "/dev/pts/{d}", .{self.number}) catch unreachable;
+    }
+
+    fn close(self: Pty) void {
+        _ = linux.close(self.slave);
+        _ = linux.close(self.master);
+    }
+
+    fn answer(self: Pty, reply: []const u8) void {
+        std.debug.assert(linux.write(self.master, reply.ptr, reply.len) == reply.len);
+    }
+};
+
+const reply_text = "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\";
+
+test "asks the terminal in a quiet mode and reads the whole reply" {
+    const pty = Pty.open();
+    defer pty.close();
+
+    // The terminal answers before the question is asked, exactly like a fast
+    // terminal replying mid-write.
+    pty.answer(reply_text);
+
+    var path_buffer: [32]u8 = undefined;
+    const adapter = Tty{ .device_path = pty.path(&path_buffer) };
+    var buffer: [Tty.reply_capacity]u8 = undefined;
+    try std.testing.expectEqualStrings(reply_text, adapter.terminal().background(&buffer).?);
 }
 
-test "reads the reply from the terminal" {
-    const sockets = try socketPair();
-    defer _ = linux.close(sockets[0]);
-    defer _ = linux.close(sockets[1]);
+test "the terminal is left exactly as it was found" {
+    const pty = Pty.open();
+    defer pty.close();
+    pty.answer(reply_text);
 
-    // Stand-in for the terminal: the answer is already buffered when the
-    // adapter asks, exactly like a fast terminal replying mid-write.
-    const reply = "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\";
-    try std.testing.expectEqual(reply.len, linux.write(sockets[1], reply.ptr, reply.len));
-
-    const adapter = Tty{ .preset_fd = sockets[0] };
+    const before = try posix.tcgetattr(pty.slave);
+    var path_buffer: [32]u8 = undefined;
+    const adapter = Tty{ .device_path = pty.path(&path_buffer) };
     var buffer: [Tty.reply_capacity]u8 = undefined;
-    const answer = adapter.terminal().background(&buffer).?;
-    try std.testing.expectEqualStrings(reply, answer);
+    _ = adapter.terminal().background(&buffer);
+    const after = try posix.tcgetattr(pty.slave);
 
-    // And the adapter really did ask the question first.
-    var question: [Tty.query.len]u8 = undefined;
-    try std.testing.expectEqual(Tty.query.len, linux.read(sockets[1], &question, question.len));
-    try std.testing.expectEqualStrings(Tty.query, &question);
+    try std.testing.expectEqual(before.lflag.ECHO, after.lflag.ECHO);
+    try std.testing.expectEqual(before.lflag.ICANON, after.lflag.ICANON);
+    try std.testing.expectEqual(before.lflag.ISIG, after.lflag.ISIG);
+    // Echo was on before the query and is on again after it.
+    try std.testing.expect(after.lflag.ECHO);
+}
+
+test "nothing is left in the queue for the shell to read" {
+    const pty = Pty.open();
+    defer pty.close();
+    pty.answer(reply_text);
+
+    var path_buffer: [32]u8 = undefined;
+    const adapter = Tty{ .device_path = pty.path(&path_buffer) };
+    var buffer: [Tty.reply_capacity]u8 = undefined;
+    _ = adapter.terminal().background(&buffer);
+
+    // Nothing remains on the input side for the shell to mistake for typed
+    // input: the whole answer was consumed.
+    var descriptors = [_]linux.pollfd{.{
+        .fd = pty.slave,
+        .events = linux.POLL.IN,
+        .revents = 0,
+    }};
+    try std.testing.expectEqual(@as(usize, 0), linux.poll(&descriptors, descriptors.len, 50));
+
+    // And the question did reach the terminal, unterminated by any echo.
+    var reply: [64]u8 = undefined;
+    const echoed = try posix.read(pty.master, &reply);
+    try std.testing.expect(std.mem.indexOf(u8, reply[0..echoed], Tty.query) != null);
 }
 
 test "a terminal that never answers is not waited for" {
-    const sockets = try socketPair();
-    defer _ = linux.close(sockets[0]);
-    defer _ = linux.close(sockets[1]);
+    const pty = Pty.open();
+    defer pty.close();
 
-    // Nothing is ever written back, so the poll must time out.
-    const adapter = Tty{ .preset_fd = sockets[0] };
+    var path_buffer: [32]u8 = undefined;
+    const adapter = Tty{ .device_path = pty.path(&path_buffer) };
     var buffer: [Tty.reply_capacity]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), adapter.terminal().background(&buffer));
 }
 
-test "an unusable descriptor yields nothing instead of crashing" {
-    var pipe: [2]posix.fd_t = undefined;
-    if (linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) != .SUCCESS) return error.SkipZigTest;
-    _ = linux.close(pipe[0]);
-    defer _ = linux.close(pipe[1]);
-
-    const adapter = Tty{ .preset_fd = pipe[0] };
-    var buffer: [Tty.reply_capacity]u8 = undefined;
-    // The write fails immediately, so the adapter reports failure rather than
-    // polling a descriptor that no longer exists.
-    try std.testing.expectEqual(@as(?[]const u8, null), adapter.terminal().background(&buffer));
-}
-
-test "without a terminal the adapter reports failure" {
+test "without a controlling terminal nothing is written anywhere" {
     const adapter = Tty{ .device_path = "/nonexistent/tty" };
     var buffer: [Tty.reply_capacity]u8 = undefined;
     try std.testing.expectEqual(@as(?[]const u8, null), adapter.terminal().background(&buffer));
+}
+
+test "a descriptor that is not a terminal is refused" {
+    // A pipe has no terminal state, so no query is attempted on it.
+    var pipe: [2]posix.fd_t = undefined;
+    std.debug.assert(linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) == .SUCCESS);
+    defer _ = linux.close(pipe[0]);
+    defer _ = linux.close(pipe[1]);
+
+    var buffer: [Tty.reply_capacity]u8 = undefined;
+    try std.testing.expect(Tty.enterQuietMode(pipe[0]) == null);
+    try std.testing.expectEqual(@as(?[]const u8, null), Tty.readReply(pipe[0], &buffer));
+}
+
+test "the reply terminator decides completeness" {
+    try std.testing.expect(!Tty.isComplete(""));
+    try std.testing.expect(!Tty.isComplete("\x1b]11;rgb:1e1e"));
+    try std.testing.expect(Tty.isComplete("\x1b]11;rgb:1e1e\x07"));
+    try std.testing.expect(Tty.isComplete("\x1b]11;rgb:1e1e\x1b\\"));
+    try std.testing.expect(!Tty.isComplete("\x1b"));
 }
