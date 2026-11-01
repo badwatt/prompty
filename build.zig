@@ -126,8 +126,17 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     const include = b.fmt("--include-pattern={s}/", .{source_root});
 
     // kcov insists on cleaning directories that exist, so create them first.
+    // The directory is emptied first: `coverage/merged` from a previous run is
+    // itself a merge input, and a stale copy of the source makes the report
+    // disagree with the code it claims to measure.
+    var clear = b.addSystemCommand(&.{ "rm", "-rf" });
+    clear.addArg(output_root);
+    clear.setName("rm -rf coverage");
+    clear.has_side_effects = true;
+
     var prepare = b.addSystemCommand(&.{"mkdir"});
     prepare.setName("mkdir coverage");
+    prepare.step.dependOn(&clear.step);
     prepare.addArg("-p");
     prepare.addArg(b.fmt("{s}/tests", .{output_root}));
     prepare.addArg(b.fmt("{s}/merged", .{output_root}));

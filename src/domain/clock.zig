@@ -10,8 +10,9 @@ pub const TimeOfDay = struct {
 /// Applies a UTC offset (in seconds, as found in a TZif zone) to a Unix
 /// timestamp and extracts the wall clock time.
 ///
-/// Timestamps before the epoch are clamped to the epoch instead of failing:
-/// a prompt has no business crashing over a clock that is set to 1969.
+/// Timestamps before the epoch are clamped to the epoch instead of failing: a
+/// prompt has no business crashing over a clock that is set to 1969. The upper
+/// end is clamped to what `EpochSeconds` can hold, which is the year 2106.
 pub fn fromUnix(unix_seconds: i64, offset_seconds: i32) TimeOfDay {
     const shifted: i128 = @as(i128, unix_seconds) + @as(i128, offset_seconds);
     const seconds: u64 = if (shifted < 0)

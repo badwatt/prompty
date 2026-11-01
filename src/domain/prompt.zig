@@ -2,7 +2,7 @@
 //!
 //! Layout (one line, always):
 //!
-//!     \ue0b6 user \ue0b0 ~/path \ue0b0 main \ue0b0  zig 0.17.0  12:04 ❯
+//!     \ue0b6 user \ue0b0 ~/path \ue0b0 main  !  1.2s  12:04 ❯
 //!
 //! The three pill segments fade towards the terminal background from left to
 //! right, then the chevron returns to it. Everything after the pill is dimmed
@@ -175,8 +175,6 @@ fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {
     return theme.muted;
 }
 
-/// The dim detail after the pill: separated by two spaces, one colour change
-/// per item and nothing else.
 /// The status symbols: conflicts first, then the worktree state, then how far
 /// the branch has drifted from its upstream.
 fn writeStatus(canvas: *Canvas, status: git_status_mod.Status) void {
@@ -197,6 +195,8 @@ fn writeStatus(canvas: *Canvas, status: git_status_mod.Status) void {
     }
 }
 
+/// The dim detail after the pill: separated by two spaces, one colour change
+/// per item and nothing else.
 const Extras = struct {
     canvas: *Canvas,
     theme: *const theme_mod.Theme,

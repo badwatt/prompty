@@ -145,7 +145,7 @@ const usage =
     "  render [--shell=zsh|bash|plain] [--no-color]   print the prompt\n" ++
     "         [--no-git-status]                        skip the git status call\n" ++
     "  init zsh|bash                                  print the shell integration\n" ++
-    "  theme                                          print the derived palette\n" ++
+    "  theme [detect [--force]]                       print (or redetect) the palette\n" ++
     "  version                                        print name and version\n" ++
     "\n" ++
     "Set PROMTY_BACKGROUND=#rrggbb to match your terminal background,\n" ++

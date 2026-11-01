@@ -6,6 +6,7 @@ const linux = std.os.linux;
 const posix = std.posix;
 
 const ports = @import("../../ports/host.zig");
+const syscall = @import("syscall.zig");
 
 pub const Out = struct {
     fd: posix.fd_t,
@@ -26,10 +27,8 @@ pub const Out = struct {
         const self: *const Out = @ptrCast(@alignCast(ptr));
         var written: usize = 0;
         while (written < bytes.len) {
-            const rc = linux.write(self.fd, bytes[written..].ptr, bytes.len - written);
-            if (linux.errno(rc) != .SUCCESS) return;
-            if (rc == 0) return;
-            written += rc;
+            const result = linux.write(self.fd, bytes[written..].ptr, bytes.len - written);
+            written += syscall.progress(result) orelse return;
         }
     }
 };

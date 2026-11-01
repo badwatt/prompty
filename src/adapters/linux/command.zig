@@ -22,6 +22,11 @@ pub const Runner = struct {
     /// A command that has not finished by now is killed and reported as failed.
     timeout_ms: i32 = 2_000,
 
+    /// The syscall behind `run`. Injectable because a failed fork cannot be
+    /// forced on demand — it takes a process limit — and the cleanup that runs
+    /// when it does is the one that must never be mistaken for a pid.
+    fork: *const fn () usize = linux.fork,
+
     pub const max_arguments = 16;
     pub const max_path_bytes = 4096;
 
@@ -50,10 +55,12 @@ pub const Runner = struct {
         const read_end = pipe[0];
         const write_end = pipe[1];
 
-        // A failed fork reports a negative error in the low bits; the child
-        // check below simply never matches, and the wait at the end turns the
-        // whole attempt into a clean failure.
-        const child: linux.pid_t = @bitCast(@as(u32, @truncate(linux.fork())));
+        // A failed fork is not a child: it has to stop here.
+        const child = childPid(self.fork()) orelse {
+            _ = linux.close(read_end);
+            _ = linux.close(write_end);
+            return null;
+        };
         if (child == 0) {
             _ = linux.close(read_end);
             _ = linux.dup2(write_end, posix.STDOUT_FILENO);
@@ -102,6 +109,17 @@ pub const Runner = struct {
         return stdout[0..filled];
     }
 
+    /// The fork result as a child pid, or null when the fork failed.
+    ///
+    /// A failure has to be caught here: the result is a negated errno, and a pid
+    /// of -1 means "any child" to `wait4` and "every process this user owns" to
+    /// `kill`. Left unchecked, one failed fork would reap a stranger's child and
+    /// then signal the whole session.
+    fn childPid(forked: usize) ?linux.pid_t {
+        if (linux.errno(forked) != .SUCCESS) return null;
+        return @bitCast(@as(u32, @truncate(forked)));
+    }
+
     /// Replaces the child process. Every failure ends the child quietly: the
     /// parent sees an empty pipe and a non-zero status.
     fn exec(
@@ -125,7 +143,9 @@ pub const Runner = struct {
         linux.exit_group(127);
     }
 
-    fn execute(
+    /// Inlined so that its tail belongs to `exec`, which never returns: the only
+    /// line this body can leave behind is the one after a failed `execve`.
+    inline fn execute(
         program: []const u8,
         arguments: [*:null]const ?[*:0]const u8,
         environment: [*:null]const ?[*:0]const u8,
@@ -163,12 +183,40 @@ pub const Runner = struct {
 
 /// `/bin/sh` is the one program every Linux system has, so the process
 /// machinery is tested through it. The application never uses a shell.
+/// A fork that failed the way one does when the user is out of processes.
+fn exhaustedFork() usize {
+    return @bitCast(-@as(isize, @backingInt(linux.E.AGAIN)));
+}
+
 fn testRunner(search_path: ?[]const u8) Runner {
     return .{
         .block = &.{},
         .search_path = search_path,
         .timeout_ms = 5_000,
     };
+}
+
+test "a failed fork is a failure, never a pid of minus one" {
+    // The failure path is not reachable on demand, so the decision is tested on
+    // the values a failed fork produces.
+    try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -1))));
+    try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -12))));
+    try std.testing.expectEqual(@as(?linux.pid_t, 4242), Runner.childPid(4242));
+}
+
+test "a failed fork closes the pipe and signals nothing" {
+    var runner = testRunner(null);
+    runner.fork = exhaustedFork;
+    var output: [64]u8 = undefined;
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        runner.command().run(&.{"/bin/true"}, &output),
+    );
+    // Both ends were closed: the descriptor numbers are free again.
+    var pipe: [2]posix.fd_t = undefined;
+    std.debug.assert(linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) == .SUCCESS);
+    _ = linux.close(pipe[0]);
+    _ = linux.close(pipe[1]);
 }
 
 test "captures the output of a real program" {

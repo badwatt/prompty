@@ -9,6 +9,7 @@ const linux = std.os.linux;
 const posix = std.posix;
 
 const ports = @import("../../ports/host.zig");
+const syscall = @import("syscall.zig");
 
 pub const Fs = struct {
     pub const instance: Fs = .{};
@@ -57,9 +58,8 @@ pub const Fs = struct {
         defer _ = linux.close(fd);
         var written: usize = 0;
         while (written < bytes.len) {
-            const rc = linux.write(fd, bytes[written..].ptr, bytes.len - written);
-            if (linux.errno(rc) != .SUCCESS) return false;
-            written += rc;
+            const result = linux.write(fd, bytes[written..].ptr, bytes.len - written);
+            written += syscall.progress(result) orelse return false;
         }
         return true;
     }

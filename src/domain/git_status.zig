@@ -7,6 +7,8 @@
 
 const std = @import("std");
 
+const git_mod = @import("git.zig");
+
 /// The categories the status row shows, in display order.
 pub const Status = struct {
     conflicted: u16 = 0,
@@ -44,7 +46,9 @@ pub const Report = struct {
     status: Status = .{},
 };
 
-pub const max_branch_bytes = 128;
+/// A branch name is bounded once, in `git.zig`: the same name arrives through
+/// `.git/HEAD` and through the porcelain header, and both have to agree.
+const max_branch_bytes = git_mod.max_head_bytes;
 
 /// Records are NUL separated (`-z`), which is the only format that survives
 /// paths containing spaces, quotes or newlines.
@@ -67,11 +71,14 @@ pub fn parse(records: []const u8) ?Report {
 
         switch (record[0]) {
             '#' => parseHeader(&report, record),
-            '1' => parseChanged(&report.status, changedKinds(record)),
+            '1' => _ = parseChanged(&report.status, record),
             '2' => {
-                parseChanged(&report.status, changedKinds(record));
-                report.status.renamed +|= 1;
-                skip_path = true;
+                // The original path follows as its own field, but only when the
+                // record itself was well formed.
+                if (parseChanged(&report.status, record)) {
+                    report.status.renamed +|= 1;
+                    skip_path = true;
+                }
             },
             'u' => report.status.conflicted +|= 1,
             '?' => report.status.untracked +|= 1,
@@ -105,26 +112,26 @@ fn parseHeader(report: *Report, record: []const u8) void {
     }
 }
 
-const Kinds = struct { index: u8, worktree: u8 };
+/// A record is `<type> <XY> ...`, and `X` is the index against HEAD while `Y`
+/// is the worktree against the index. The records come from another program, so
+/// a short one is ignored instead of indexed: reading the `XY` field of a
+/// truncated record used to read whatever followed it in the buffer.
+fn parseChanged(status: *Status, record: []const u8) bool {
+    if (record.len < 4) return false;
+    const index = record[2];
+    const worktree = record[3];
 
-/// The `XY` field: `X` is the index against HEAD, `Y` is the worktree against
-/// the index.
-fn changedKinds(record: []const u8) Kinds {
-    std.debug.assert(record.len >= 4);
-    return .{ .index = record[2], .worktree = record[3] };
-}
-
-fn parseChanged(status: *Status, kinds: Kinds) void {
     // A deletion is reported once, as a deletion, no matter which side of the
     // index records it: deleting a file is not "modifying" it.
-    if (kinds.index == 'D' or kinds.worktree == 'D') {
+    if (index == 'D' or worktree == 'D') {
         status.deleted +|= 1;
-        return;
+        return true;
     }
-    if (kinds.index != '.' and kinds.index != ' ') status.staged +|= 1;
-    if (kinds.worktree != '.' and kinds.worktree != ' ') status.modified +|= 1;
+    if (index != '.' and index != ' ') status.staged +|= 1;
+    if (worktree != '.' and worktree != ' ') status.modified +|= 1;
     // Renames are counted from the record type, not from `X`, so that a
     // renamed entry is never counted twice.
+    return true;
 }
 
 /// `+<ahead> -<behind>`
@@ -235,6 +242,18 @@ test "an over-long branch name is rejected rather than truncated" {
     buffer[prefix.len + max_branch_bytes + 1] = 0;
     const records = buffer[0 .. prefix.len + max_branch_bytes + 2];
     try std.testing.expectEqual(@as(?[]const u8, null), parse(records).?.branch);
+}
+
+test "a truncated changed record is ignored rather than read past" {
+    // The records come from another program. A record too short to carry its
+    // XY field is not a change, and indexing it anyway read whatever followed
+    // in the read buffer.
+    const report = parse("1\x00# branch.head main\x00").?;
+    try std.testing.expect(report.status.isClean());
+    try std.testing.expectEqualStrings("main", report.branch.?);
+    // The same for a rename, which reads the field and then counts itself.
+    try std.testing.expect(parse("2\x00").?.status.isClean());
+    try std.testing.expect(parse("1 M\x00").?.status.isClean());
 }
 
 test "garbage and empty input are rejected" {

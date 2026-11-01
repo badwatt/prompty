@@ -30,6 +30,7 @@ test {
     _ = @import("adapters/linux/env.zig");
     _ = @import("adapters/linux/fs.zig");
     _ = @import("adapters/linux/out.zig");
+    _ = @import("adapters/linux/syscall.zig");
     _ = @import("adapters/linux/tty.zig");
     _ = @import("adapters/tzif.zig");
 
