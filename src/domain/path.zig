@@ -193,6 +193,32 @@ fn clip(out: []u8, at: usize, content: []const u8) usize {
     return start + length;
 }
 
+/// Appends `suffix` to `directory` with exactly one separator, or returns null
+/// when the result does not fit. An empty directory means the suffix alone,
+/// which is what a `PATH` entry for the current directory means.
+///
+/// Three adapters and the use case each grew their own copy of this, with three
+/// slightly different ideas of what to do with a trailing slash and an empty
+/// directory. One of them is enough.
+pub fn join(out: []u8, directory: []const u8, suffix: []const u8) ?[]u8 {
+    if (directory.len == 0) {
+        if (suffix.len > out.len) return null;
+        @memcpy(out[0..suffix.len], suffix);
+        return out[0..suffix.len];
+    }
+    const separator: usize = @intFromBool(directory[directory.len - 1] != '/');
+    const total = directory.len + separator + suffix.len;
+    if (total > out.len) return null;
+    @memcpy(out[0..directory.len], directory);
+    var written = directory.len;
+    if (separator == 1) {
+        out[written] = '/';
+        written += 1;
+    }
+    @memcpy(out[written..][0..suffix.len], suffix);
+    return out[0 .. written + suffix.len];
+}
+
 fn trimTrailingSlashes(path: []const u8) []const u8 {
     var end = path.len;
     while (end > 0 and path[end - 1] == '/') end -= 1;
@@ -458,4 +484,16 @@ test "property: valid UTF-8 in, valid UTF-8 out" {
         try std.testing.expect(std.unicode.utf8ValidateSlice(label));
         try std.testing.expect(label.len > 0);
     }
+}
+
+test "join adds one separator and refuses what does not fit" {
+    var buffer: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("a/b", join(&buffer, "a", "b").?);
+    try std.testing.expectEqualStrings("a/b", join(&buffer, "a/", "b").?);
+    try std.testing.expectEqualStrings("/b", join(&buffer, "/", "b").?);
+    // An empty directory is the current directory: no separator, just the name.
+    try std.testing.expectEqualStrings("b", join(&buffer, "", "b").?);
+    var small: [4]u8 = undefined;
+    try std.testing.expectEqual(@as(?[]u8, null), join(&small, "abc", "de"));
+    try std.testing.expectEqual(@as(?[]u8, null), join(&small, "", "abcde"));
 }

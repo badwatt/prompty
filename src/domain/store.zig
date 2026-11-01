@@ -7,9 +7,12 @@
 const std = @import("std");
 
 pub const Store = struct {
-    /// Eight kibibytes is far more than a prompt can ever need: a path is
-    /// bounded by `max_display_bytes` and a branch name by 256 bytes.
-    pub const capacity = 8192;
+    /// Everything the prompt borrows, at the largest size the rest of the
+    /// program can hand over: a user name (64), a path label (512), the branch
+    /// from the porcelain (128) or from HEAD (128). The test below recomputes
+    /// this sum from those constants, so growing a field fails here rather than
+    /// silently clipping a name.
+    pub const capacity = 1024;
 
     bytes: [capacity]u8 = undefined,
     used: usize = 0,
@@ -103,15 +106,23 @@ test "reset recycles the whole buffer" {
     try std.testing.expectEqualStrings("three", store.dupe("three"));
 }
 
-test "capacity is enough for a maximal prompt" {
+test "a maximal prompt really fits, with room to spare" {
+    const prompt = @import("prompt.zig");
+    const path = @import("path.zig");
+    const git = @import("git.zig");
+
     var store: Store = undefined;
     store.reset();
-    // A full-size path plus every other slice a render needs, with room left.
-    const long_path: [4096]u8 = @splat('x');
-    const long_branch: [256]u8 = @splat('y');
-    _ = store.dupe(&long_path);
-    _ = store.dupe(&long_branch);
-    try std.testing.expect(store.used < Store.capacity);
+    const user: [prompt.max_user_bytes]u8 = @splat('u');
+    const label: [path.max_display_bytes]u8 = @splat('x');
+    const branch: [git.max_head_bytes]u8 = @splat('y');
+
+    try std.testing.expectEqual(@as(usize, prompt.max_user_bytes), store.dupeDisplay(&user, prompt.max_user_bytes).len);
+    try std.testing.expectEqual(@as(usize, path.max_display_bytes), store.dupePrintable(&label).len);
+    try std.testing.expectEqual(@as(usize, git.max_head_bytes), store.dupePrintable(&branch).len);
+    // Still room for the second copy of a branch name that a status read can
+    // bring with it.
+    try std.testing.expectEqual(@as(usize, git.max_head_bytes), store.dupePrintable(&branch).len);
 }
 
 test "a claim larger than the store is clipped, not written past it" {
@@ -167,4 +178,16 @@ test "property: a display name is always bounded and stays valid" {
             try std.testing.expect(std.unicode.utf8ValidateSlice(shown));
         }
     }
+}
+
+test "the store is at least as large as the largest prompt it can be handed" {
+    const prompt = @import("prompt.zig");
+    const path = @import("path.zig");
+    const git = @import("git.zig");
+
+    // A user name, a path label, and either source of a branch name — the
+    // porcelain header and `.git/HEAD` are bounded by the same constant, but a
+    // render can hold both while the status is being merged in.
+    const worst_case = prompt.max_user_bytes + path.max_display_bytes + 2 * git.max_head_bytes;
+    try std.testing.expect(worst_case <= Store.capacity);
 }

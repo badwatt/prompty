@@ -10,6 +10,7 @@ const linux = std.os.linux;
 const posix = std.posix;
 
 const ports = @import("../../ports/host.zig");
+const path_mod = @import("../../domain/path.zig");
 const syscall = @import("syscall.zig");
 
 pub const Runner = struct {
@@ -152,7 +153,7 @@ pub const Runner = struct {
         var buffer: [max_path_bytes]u8 = undefined;
         var directories = std.mem.splitScalar(u8, path, ':');
         while (directories.next()) |directory| {
-            const candidate = join(&buffer, directory, program) orelse continue;
+            const candidate = path_mod.join(&buffer, directory, program) orelse continue;
             execute(candidate, arguments, environment);
         }
         linux.exit_group(127);
@@ -181,19 +182,7 @@ pub const Runner = struct {
         return "/usr/local/bin:/usr/bin:/bin";
     }
 
-    fn join(buffer: []u8, directory: []const u8, program: []const u8) ?[]const u8 {
-        const separator: usize = @intFromBool(directory.len > 0);
-        const total = directory.len + separator + program.len;
-        if (total > buffer.len) return null;
-        @memcpy(buffer[0..directory.len], directory);
-        var written = directory.len;
-        if (separator == 1) {
-            buffer[written] = '/';
-            written += 1;
-        }
-        @memcpy(buffer[written..][0..program.len], program);
-        return buffer[0 .. written + program.len];
-    }
+    const join = path_mod.join;
 };
 
 /// `/bin/sh` is the one program every Linux system has, so the process

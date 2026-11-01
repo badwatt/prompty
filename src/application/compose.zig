@@ -318,23 +318,7 @@ fn existsIn(host: ports.Host, git_dir: []const u8, name: []const u8, scratch: []
     return host.files.exists(path);
 }
 
-fn join(buffer: []u8, directory: []const u8, suffix: []const u8) ?[]u8 {
-    std.debug.assert(suffix.len > 0);
-    if (directory.len == 0) return copy(buffer, suffix);
-
-    const separator = directory[directory.len - 1] != '/';
-    const total = directory.len + @intFromBool(separator) + suffix.len;
-    if (total > buffer.len) return null;
-
-    @memcpy(buffer[0..directory.len], directory);
-    var written = directory.len;
-    if (separator) {
-        buffer[written] = '/';
-        written += 1;
-    }
-    @memcpy(buffer[written..][0..suffix.len], suffix);
-    return buffer[0 .. written + suffix.len];
-}
+const join = path_mod.join;
 
 fn copy(buffer: []u8, content: []const u8) ?[]u8 {
     if (content.len > buffer.len) return null;

@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+const path_mod = @import("path.zig");
+
 pub const relative_path = "prompty/theme";
 
 pub const max_path_bytes = 4096;
@@ -23,19 +25,7 @@ pub fn path(out: []u8, xdg_cache_home: ?[]const u8, home: ?[]const u8) ?[]const 
     return null;
 }
 
-fn join(out: []u8, directory: []const u8, suffix: []const u8) ?[]const u8 {
-    const separator: usize = @intFromBool(directory[directory.len - 1] != '/');
-    const total = directory.len + separator + suffix.len;
-    if (total > out.len) return null;
-    @memcpy(out[0..directory.len], directory);
-    var written = directory.len;
-    if (separator == 1) {
-        out[written] = '/';
-        written += 1;
-    }
-    @memcpy(out[written..][0..suffix.len], suffix);
-    return out[0 .. written + suffix.len];
-}
+const join = path_mod.join;
 
 test "uses the XDG cache when it is set" {
     var buffer: [max_path_bytes]u8 = undefined;
