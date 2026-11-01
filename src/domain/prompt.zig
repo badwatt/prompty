@@ -160,15 +160,6 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         extras.begin(model.theme.green);
         extras.text(direnv_glyph);
     }
-    if (model.exit_code) |code| {
-        // One glyph, no number: an interrupted command (128 + SIGINT) and a
-        // command that exited with 1 are the same thing to a prompt, and the
-        // code is one `$?` away in the shell.
-        if (code != 0) {
-            extras.begin(model.theme.red);
-            extras.text(failure_glyph);
-        }
-    }
     if (model.duration_ms) |milliseconds| {
         extras.begin(durationColor(&model.theme, milliseconds));
         var human: [duration_mod.max_length]u8 = undefined;
@@ -180,6 +171,16 @@ pub fn render(model: *const Model, buffer: []u8) []const u8 {
         extras.text(" ");
         var digits: [clock_mod.max_length]u8 = undefined;
         extras.text(clock_mod.format(&digits, now));
+    }
+    if (model.exit_code) |code| {
+        // One glyph, no number: an interrupted command (128 + SIGINT) and a
+        // command that exited with 1 are the same thing to a prompt, and the
+        // code is one `$?` away in the shell. It sits last, next to the
+        // chevron, because it is about the command that just ran.
+        if (code != 0) {
+            extras.begin(model.theme.red);
+            extras.text(failure_glyph);
+        }
     }
 
     paint(&canvas, model.theme.green, null);
@@ -523,6 +524,21 @@ test "a status of conflicts and stashes leads the row" {
     };
     try std.testing.expectEqualStrings(
         "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} main =$\u{00bb} \u{e0b0} \u{276f} ",
+        renderToString(&model),
+    );
+}
+
+test "the failure mark sits between the clock and the chevron" {
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/repo",
+        .time = .{ .hour = 12, .minute = 4 },
+        .duration_ms = 1_200,
+        .exit_code = 130,
+    };
+    try std.testing.expectEqualStrings(
+        "\n\u{e0b6} ~/repo \u{e0b0} 1.2s  \u{f051a} 12:04  \u{2718} \u{276f} ",
         renderToString(&model),
     );
 }
