@@ -146,10 +146,8 @@ fn withStatus(base: prompt.Git, report: git_status_mod.Report, store: *store_mod
     var git = base;
     if (report.branch) |branch| {
         git.branch = store.dupePrintable(branch);
-        git.detached = false;
     } else if (report.detached) {
         if (report.commit) |commit| git.branch = store.dupePrintable(git_mod.short(commit));
-        git.detached = true;
     }
     git.status = report.status;
     return git;
@@ -259,14 +257,7 @@ fn probeRepository(
             return .{
                 .root = located.root,
                 .git_dir = located.git_dir,
-                .git = .{
-                    .branch = branch,
-                    .operation = operation,
-                    .detached = switch (located.head) {
-                        .named => false,
-                        .detached => true,
-                    },
-                },
+                .git = .{ .branch = branch, .operation = operation },
             };
         }
         directory = parent(directory) orelse return null;
@@ -448,7 +439,6 @@ test "collects every fact from a fake project" {
     try std.testing.expectEqualStrings("…/proj", model.path);
     try std.testing.expectEqualStrings("main", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
-    try std.testing.expect(!model.git.?.detached);
 }
 
 test "an absurdly long user name cannot take over the line" {
@@ -506,7 +496,6 @@ test "repository state is read from marker files" {
     harness.host.files.directories = &directories;
 
     const model = harness.model(.{});
-    try std.testing.expect(model.git.?.detached);
     try std.testing.expectEqualStrings("a1b2c3d", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.rebase, model.git.?.operation);
 }
@@ -716,7 +705,6 @@ test "the working tree status comes from one git invocation" {
     const git = model.git.?;
 
     try std.testing.expectEqualStrings("main", git.branch);
-    try std.testing.expect(!git.detached);
     try std.testing.expectEqual(@as(u16, 1), git.status.modified);
     try std.testing.expectEqual(@as(u16, 1), git.status.staged);
     try std.testing.expectEqual(@as(u16, 1), git.status.deleted);
@@ -745,7 +733,6 @@ test "a detached repository keeps the short commit from the porcelain" {
     harness.host.commands.response = detached;
 
     const git = harness.model(.{}).git.?;
-    try std.testing.expect(git.detached);
     try std.testing.expectEqualStrings("a1b2c3d", git.branch);
 }
 

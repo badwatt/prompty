@@ -21,6 +21,7 @@ const linux = std.os.linux;
 const posix = std.posix;
 
 const ports = @import("../../ports/host.zig");
+const syscall = @import("syscall.zig");
 
 pub const Tty = struct {
     /// The controlling terminal, opened only when detection is requested.
@@ -114,27 +115,35 @@ pub const Tty = struct {
     }
 
     /// Reads until the reply is complete, so that no byte of it is left in the
-    /// terminal's input queue for the shell to read as typed input.
+    /// terminal's input queue for the shell to read as typed input. Anything
+    /// that arrives after the terminator is swallowed for the same reason.
     fn readReply(device: posix.fd_t, buffer: []u8) ?[]const u8 {
         var filled: usize = 0;
         var complete = false;
         var reads: u8 = 0;
         // A reply arrives in one piece in practice; the bound exists so that a
         // talkative terminal cannot spin here.
-        while (reads < max_reads and !complete) : (reads += 1) {
-            std.debug.assert(filled < buffer.len);
-            var descriptors = [_]linux.pollfd{.{
-                .fd = device,
-                .events = linux.POLL.IN,
-                .revents = 0,
-            }};
-            const ready = linux.poll(&descriptors, descriptors.len, timeout_ms);
-            if (linux.errno(ready) != .SUCCESS or ready == 0) break;
+        while (reads < max_reads) : (reads += 1) {
+            // Once the reply is whole there is nothing left to wait for: look
+            // for stragglers and leave immediately if there are none.
+            if (!syscall.ready(device, if (complete) 0 else timeout_ms)) break;
+
+            if (complete) {
+                // Stragglers: read them and throw them away, or the shell will.
+                var discard: [32]u8 = undefined;
+                if ((posix.read(device, &discard) catch 0) == 0) break;
+                continue;
+            }
 
             const received = posix.read(device, buffer[filled..]) catch 0;
             if (received == 0) break;
             filled += received;
-            complete = isComplete(buffer[0..filled]);
+            if (replyEnd(buffer[0..filled])) |end| {
+                // Whatever the terminal appended arrived in the same read, so it
+                // is already consumed: the answer ends at the terminator.
+                filled = end;
+                complete = true;
+            }
         }
         // A partial reply cannot be trusted, and leaving it in the queue is
         // exactly the failure this function exists to avoid.
@@ -142,11 +151,16 @@ pub const Tty = struct {
         return buffer[0..filled];
     }
 
-    /// The reply ends with BEL or with ST (`ESC \\`).
-    fn isComplete(reply: []const u8) bool {
-        if (reply.len == 0) return false;
-        if (reply[reply.len - 1] == 0x07) return true;
-        return reply.len >= 2 and reply[reply.len - 2] == 0x1b and reply[reply.len - 1] == '\\';
+    /// Where the reply ends inside `reply`, if it has arrived at all: the
+    /// terminator is BEL or ST (`ESC \\`). Searching for it rather than
+    /// looking at the last byte keeps a terminal that appends to its answer
+    /// from hiding the end of the reply.
+    fn replyEnd(reply: []const u8) ?usize {
+        for (reply, 0..) |byte, index| {
+            if (byte == 0x07) return index + 1;
+            if (byte == 0x1b and index + 1 < reply.len and reply[index + 1] == '\\') return index + 2;
+        }
+        return null;
     }
 };
 
@@ -281,6 +295,49 @@ test "without a controlling terminal nothing is written anywhere" {
     try std.testing.expectEqual(@as(?[]const u8, null), adapter.terminal().background(&buffer));
 }
 
+test "stragglers that arrive after the reply are drained" {
+    // The reply fills the buffer exactly, so the bytes behind it are still in
+    // the queue when the terminator is recognised: they have to be read and
+    // thrown away, not left for the shell to read as typing.
+    const pty = Pty.open();
+    defer pty.close();
+    // Quiet mode, as `background` leaves the terminal: in canonical mode a read
+    // waits for a newline that an escape sequence never contains.
+    const quiet = Tty.enterQuietMode(pty.slave).?;
+    defer posix.tcsetattr(pty.slave, .NOW, quiet.saved) catch {};
+    pty.answer(reply_text ++ "straggler");
+
+    var buffer: [reply_text.len]u8 = undefined;
+    try std.testing.expectEqualStrings(reply_text, Tty.readReply(pty.slave, &buffer).?);
+
+    var descriptors = [_]linux.pollfd{.{
+        .fd = pty.slave,
+        .events = linux.POLL.IN,
+        .revents = 0,
+    }};
+    try std.testing.expectEqual(@as(usize, 0), linux.poll(&descriptors, descriptors.len, 50));
+}
+
+test "bytes that arrive with the reply are not left for the shell" {
+    const pty = Pty.open();
+    defer pty.close();
+    // Some terminals append to the answer. Whatever follows the terminator is
+    // not the reply, and leaving it queued means the shell reads it as typing.
+    pty.answer(reply_text ++ "straggler");
+
+    var path_buffer: [32]u8 = undefined;
+    const adapter = Tty{ .device_path = pty.path(&path_buffer) };
+    var buffer: [Tty.reply_capacity]u8 = undefined;
+    try std.testing.expectEqualStrings(reply_text, adapter.terminal().background(&buffer).?);
+
+    var descriptors = [_]linux.pollfd{.{
+        .fd = pty.slave,
+        .events = linux.POLL.IN,
+        .revents = 0,
+    }};
+    try std.testing.expectEqual(@as(usize, 0), linux.poll(&descriptors, descriptors.len, 50));
+}
+
 test "a descriptor that is not a terminal is refused" {
     // A pipe has no terminal state, so no query is attempted on it.
     var pipe: [2]posix.fd_t = undefined;
@@ -310,10 +367,12 @@ test "terminating signals are held only while the terminal is changed" {
     }
 }
 
-test "the reply terminator decides completeness" {
-    try std.testing.expect(!Tty.isComplete(""));
-    try std.testing.expect(!Tty.isComplete("\x1b]11;rgb:1e1e"));
-    try std.testing.expect(Tty.isComplete("\x1b]11;rgb:1e1e\x07"));
-    try std.testing.expect(Tty.isComplete("\x1b]11;rgb:1e1e\x1b\\"));
-    try std.testing.expect(!Tty.isComplete("\x1b"));
+test "the terminator is found wherever it lands" {
+    try std.testing.expectEqual(@as(?usize, null), Tty.replyEnd(""));
+    try std.testing.expectEqual(@as(?usize, null), Tty.replyEnd("\x1b]11;rgb:1e1e"));
+    try std.testing.expectEqual(@as(?usize, null), Tty.replyEnd("\x1b"));
+    try std.testing.expectEqual(@as(?usize, reply_text.len), Tty.replyEnd(reply_text));
+    // A terminal that keeps talking does not hide the terminator.
+    try std.testing.expectEqual(@as(?usize, reply_text.len), Tty.replyEnd(reply_text ++ "straggler"));
+    try std.testing.expectEqual(@as(?usize, 1), Tty.replyEnd("\x07"));
 }

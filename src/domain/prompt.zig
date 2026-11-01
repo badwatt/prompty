@@ -21,9 +21,10 @@ const Rgb = theme_mod.Rgb;
 const Shell = canvas_mod.Shell;
 
 pub const Git = struct {
+    /// The branch name, or the short commit when HEAD is detached: to a prompt
+    /// the two are the same thing, a label for where you are.
     branch: []const u8,
     operation: git_mod.Operation,
-    detached: bool,
     status: git_status_mod.Status = .{},
 };
 
@@ -263,7 +264,7 @@ test "renders the full line without colour" {
         .color = false,
         .user = "badwatt",
         .path = "~/src/prompty",
-        .git = .{ .branch = "main", .operation = .none, .detached = false },
+        .git = .{ .branch = "main", .operation = .none },
         .time = .{ .hour = 12, .minute = 4 },
         .duration_ms = 1_234,
     };
@@ -316,7 +317,7 @@ test "every separator leaves one surface and enters the next" {
         .theme = theme,
         .user = "dev",
         .path = "~/p",
-        .git = .{ .branch = "main", .operation = .none, .detached = false },
+        .git = .{ .branch = "main", .operation = .none },
     };
     const rendered = renderToString(&model);
 
@@ -355,7 +356,7 @@ test "the user name is bold and the boldness ends before the separator" {
         .theme = theme,
         .user = "dev",
         .path = "~/p",
-        .git = .{ .branch = "main", .operation = .none, .detached = false },
+        .git = .{ .branch = "main", .operation = .none },
     };
     const rendered = renderToString(&model);
 
@@ -390,12 +391,12 @@ test "without a user segment the cap starts the path segment" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, powerline.separator));
 }
 
-test "detached heads and in-progress operations are visible" {
+test "a detached head shows its commit and the operation in progress" {
     const model = Model{
         .theme = fixtureTheme(),
         .color = false,
         .path = "~/repo",
-        .git = .{ .branch = "a1b2c3d", .operation = .rebase, .detached = true },
+        .git = .{ .branch = "a1b2c3d", .operation = .rebase },
     };
     try std.testing.expectEqualStrings(
         "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} a1b2c3d rebase \u{e0b0} \u{276f} ",
@@ -408,7 +409,7 @@ test "direnv and a failed command are both marked" {
         .theme = fixtureTheme(),
         .color = false,
         .path = "~/mono",
-        .git = .{ .branch = "dev", .operation = .merge, .detached = false },
+        .git = .{ .branch = "dev", .operation = .merge },
         .direnv = true,
         .exit_code = 130,
     };
@@ -429,7 +430,6 @@ test "the branch carries its glyph and the status carries its symbols" {
         .git = .{
             .branch = "main",
             .operation = .none,
-            .detached = false,
             .status = .{
                 .deleted = 1,
                 .modified = 1,
@@ -448,7 +448,7 @@ test "the branch carries its glyph and the status carries its symbols" {
         .theme = fixtureTheme(),
         .color = false,
         .path = "~/repo",
-        .git = .{ .branch = "main", .operation = .none, .detached = false, .status = .{ .ahead = 1 } },
+        .git = .{ .branch = "main", .operation = .none, .status = .{ .ahead = 1 } },
     };
     try std.testing.expect(std.mem.indexOf(u8, renderToString(&upstream), " \u{21e1} ") != null);
 
@@ -456,7 +456,7 @@ test "the branch carries its glyph and the status carries its symbols" {
         .theme = fixtureTheme(),
         .color = false,
         .path = "~/repo",
-        .git = .{ .branch = "main", .operation = .none, .detached = false, .status = .{ .behind = 2 } },
+        .git = .{ .branch = "main", .operation = .none, .status = .{ .behind = 2 } },
     };
     try std.testing.expect(std.mem.indexOf(u8, renderToString(&behind), " \u{21e3} ") != null);
 
@@ -468,7 +468,6 @@ test "the branch carries its glyph and the status carries its symbols" {
         .git = .{
             .branch = "main",
             .operation = .none,
-            .detached = false,
             .status = .{ .ahead = 1, .behind = 1 },
         },
     };
@@ -486,7 +485,6 @@ test "a status of conflicts and stashes leads the row" {
         .git = .{
             .branch = "main",
             .operation = .none,
-            .detached = false,
             .status = .{ .conflicted = 1, .stashed = 1, .renamed = 1 },
         },
     };
@@ -534,7 +532,7 @@ test "zsh output wraps every escape and quotes percent signs" {
         .shell = .zsh,
         .user = "dev",
         .path = "~/50%",
-        .git = .{ .branch = "main", .operation = .none, .detached = false },
+        .git = .{ .branch = "main", .operation = .none },
     };
     const rendered = renderToString(&model);
 
@@ -582,7 +580,6 @@ test "the buffer bound is never exceeded by a maximal prompt" {
         .git = .{
             .branch = &branch_buffer,
             .operation = .cherry_pick,
-            .detached = false,
             .status = .{
                 .conflicted = 1,
                 .stashed = 1,

@@ -58,17 +58,18 @@ pub const FakeFiles = struct {
 
     fn write(ptr: *anyopaque, path: []const u8, bytes: []const u8) bool {
         const self: *FakeFiles = @ptrCast(@alignCast(ptr));
-        // Copy the bytes: the writer hands over a stack buffer it reuses.
-        const room = @min(bytes.len, self.write_storage.len - self.write_storage_used);
-        @memcpy(self.write_storage[self.write_storage_used..][0..room], bytes[0..room]);
-        if (self.write_count < self.written.len) {
-            self.written[self.write_count] = .{
-                .path = path,
-                .bytes = self.write_storage[self.write_storage_used..][0..room],
-            };
-        }
-        self.write_storage_used += room;
         self.write_count += 1;
+        // A fake that truncates and reports success would let a test pass where
+        // the real adapter fails, so the limit is honest here too.
+        if (bytes.len > self.write_storage.len - self.write_storage_used) return false;
+        if (self.write_count > self.written.len) return false;
+        // Copy the bytes: the writer hands over a stack buffer it reuses.
+        @memcpy(self.write_storage[self.write_storage_used..][0..bytes.len], bytes);
+        self.written[self.write_count - 1] = .{
+            .path = path,
+            .bytes = self.write_storage[self.write_storage_used..][0..bytes.len],
+        };
+        self.write_storage_used += bytes.len;
         return true;
     }
 

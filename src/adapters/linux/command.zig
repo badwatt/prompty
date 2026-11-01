@@ -10,6 +10,7 @@ const linux = std.os.linux;
 const posix = std.posix;
 
 const ports = @import("../../ports/host.zig");
+const syscall = @import("syscall.zig");
 
 pub const Runner = struct {
     /// The environment block: handed to the child unchanged and used to find
@@ -72,15 +73,9 @@ pub const Runner = struct {
 
         var filled: usize = 0;
         while (filled < stdout.len) {
-            var descriptors = [_]linux.pollfd{.{
-                .fd = read_end,
-                .events = linux.POLL.IN,
-                .revents = 0,
-            }};
-            // Zero means the deadline expired and an error means the wait is
-            // hopeless; either way there is nothing more to read.
-            const ready = linux.poll(&descriptors, descriptors.len, self.timeout_ms);
-            if (linux.errno(ready) != .SUCCESS or ready == 0) break;
+            // The deadline expired, the wait failed, or the writer is gone:
+            // either way there is nothing more to read.
+            if (!syscall.ready(read_end, self.timeout_ms)) break;
             // A read error is indistinguishable from the end of the output for
             // our purposes: both mean "nothing more to parse".
             const received = posix.read(read_end, stdout[filled..]) catch 0;

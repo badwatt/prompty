@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const linux = std.os.linux;
+const posix = std.posix;
 
 /// How far a write got. Zero means a signal interrupted it before it wrote
 /// anything and it has to be tried again; null means it failed, and a prompt has
@@ -18,6 +19,43 @@ pub fn progress(result: usize) ?usize {
         .INTR => return 0,
         else => return null,
     }
+}
+
+/// Waits for `fd` to have something to read. False means nothing arrived in
+/// time or the wait failed: either way there is nothing more to read.
+///
+/// A signal that interrupts the wait is not an answer. Treating it as one — a
+/// window resize during `git status` — turned a whole render into "no status".
+pub fn ready(fd: posix.fd_t, timeout_ms: i32) bool {
+    var descriptors = [_]linux.pollfd{.{
+        .fd = fd,
+        .events = linux.POLL.IN,
+        .revents = 0,
+    }};
+    var step: Result = .interrupted;
+    while (step == .interrupted) {
+        step = classify(linux.poll(&descriptors, descriptors.len, timeout_ms));
+    }
+    return step == .readable;
+}
+
+const Result = enum { readable, empty, interrupted };
+
+fn classify(result: usize) Result {
+    return switch (linux.errno(result)) {
+        .SUCCESS => if (result > 0) .readable else .empty,
+        .INTR => .interrupted,
+        else => .empty,
+    };
+}
+
+test "a poll result says whether to read, stop, or wait again" {
+    try std.testing.expectEqual(Result.readable, classify(2));
+    try std.testing.expectEqual(Result.empty, classify(0));
+    const interrupted: usize = @bitCast(-@as(isize, @backingInt(linux.E.INTR)));
+    try std.testing.expectEqual(Result.interrupted, classify(interrupted));
+    const failed: usize = @bitCast(-@as(isize, @backingInt(linux.E.BADF)));
+    try std.testing.expectEqual(Result.empty, classify(failed));
 }
 
 test "a complete write is progress" {
