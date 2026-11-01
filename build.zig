@@ -83,6 +83,18 @@ pub fn build(b: *std.Build) void {
     smoke.has_side_effects = true;
     smoke_step.dependOn(&smoke.step);
 
+    // The hexagon, checked in CI rather than remembered: see tools/check_layers.zig.
+    const layers_step = b.step("layers", "Fail if an import leaves its layer");
+    const layers_module = b.createModule(.{
+        .root_source_file = b.path("tools/check_layers.zig"),
+        .target = b.graph.host,
+    });
+    const layers_check = b.addExecutable(.{ .name = "check-layers", .root_module = layers_module });
+    const layers_run = b.addRunArtifact(layers_check);
+    layers_run.has_side_effects = true;
+    layers_run.addArg("src");
+    layers_step.dependOn(&layers_run.step);
+
     const run_step = b.step("run", "Run prompty");
     const run_command = b.addRunArtifact(exe);
     run_command.step.dependOn(b.getInstallStep());

@@ -256,6 +256,12 @@ what makes `programs.prompty.enable = true;` sufficient.
 
 ## Testing
 
+The hexagon is checked, not remembered: `zig build layers` reads every file in
+`domain/` and `ports/` and fails if one imports outwards. A domain file that
+reached for `std.os.linux` would stop being testable without a machine, and that
+is the reason the layers exist.
+
+
 - 228 tests: pure domain tests, integration tests that drive the whole use case
   through the ports against a fake filesystem, clock, terminal and environment,
   and property tests that drive a seeded generator through the parsers. The
