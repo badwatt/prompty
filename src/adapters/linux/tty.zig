@@ -61,8 +61,8 @@ pub const Tty = struct {
         const guard = SignalGuard.install();
         defer guard.release();
 
-        const quiet = enterQuietMode(device) orelse return null;
-        defer posix.tcsetattr(device, .NOW, quiet.saved) catch {};
+        if (!enterQuietMode(device)) return null;
+        defer leaveQuietMode(device);
 
         const written = linux.write(device, query.ptr, query.len);
         if (linux.errno(written) != .SUCCESS) return null;
@@ -90,19 +90,36 @@ pub const Tty = struct {
         }
     };
 
-    const Quiet = struct { saved: posix.termios };
-
     /// Echo off, canonical off: the reply must not be shown and must not wait
     /// for a newline that will never come.
-    fn enterQuietMode(device: posix.fd_t) ?Quiet {
-        const saved = posix.tcgetattr(device) catch return null;
-        var quiet = saved;
+    fn enterQuietMode(device: posix.fd_t) bool {
+        const current = posix.tcgetattr(device) catch return false;
+        var quiet = current;
         quiet.lflag.ECHO = false;
         quiet.lflag.ECHONL = false;
         quiet.lflag.ICANON = false;
         quiet.iflag.ICRNL = false;
-        posix.tcsetattr(device, .NOW, quiet) catch return null;
-        return .{ .saved = saved };
+        posix.tcsetattr(device, .NOW, quiet) catch return false;
+        return true;
+    }
+
+    /// Puts the four flags back on, taken from the terminal as it is now rather
+    /// than from a snapshot taken before the query.
+    ///
+    /// A snapshot can be stale: two shells starting at once both detect, the
+    /// second one snapshots the first one's quiet mode, and replaying that
+    /// snapshot leaves a terminal with no echo and no line editing. Setting the
+    /// flags is idempotent and order-independent, so the last one out still
+    /// leaves a usable terminal. These four are the cooked settings, and
+    /// detection only ever runs from a cooked shell.
+    fn leaveQuietMode(device: posix.fd_t) void {
+        const current = posix.tcgetattr(device) catch return;
+        var cooked = current;
+        cooked.lflag.ECHO = true;
+        cooked.lflag.ECHONL = true;
+        cooked.lflag.ICANON = true;
+        cooked.iflag.ICRNL = true;
+        posix.tcsetattr(device, .NOW, cooked) catch {};
     }
 
     /// Reads until the reply is complete, so that no byte of it is left in the
@@ -254,11 +271,27 @@ test "without a controlling terminal nothing is written anywhere" {
     try std.testing.expectEqual(@as(?[]const u8, null), adapter.terminal().background(&buffer));
 }
 
+test "two detections in the same window cannot leave the terminal quiet" {
+    const pty = Pty.open();
+    defer pty.close();
+
+    try std.testing.expect(Tty.enterQuietMode(pty.slave));
+    try std.testing.expect(Tty.enterQuietMode(pty.slave));
+
+    Tty.leaveQuietMode(pty.slave);
+    Tty.leaveQuietMode(pty.slave);
+
+    const cooked = posix.tcgetattr(pty.slave) catch unreachable;
+    try std.testing.expect(cooked.lflag.ECHO);
+    try std.testing.expect(cooked.lflag.ICANON);
+    try std.testing.expect(cooked.iflag.ICRNL);
+}
+
 test "stragglers that arrive after the reply are drained" {
     const pty = Pty.open();
     defer pty.close();
-    const quiet = Tty.enterQuietMode(pty.slave).?;
-    defer posix.tcsetattr(pty.slave, .NOW, quiet.saved) catch {};
+    try std.testing.expect(Tty.enterQuietMode(pty.slave));
+    defer Tty.leaveQuietMode(pty.slave);
     pty.answer(reply_text ++ "straggler");
 
     var buffer: [reply_text.len]u8 = undefined;
@@ -297,7 +330,7 @@ test "a descriptor that is not a terminal is refused" {
     defer _ = linux.close(pipe[1]);
 
     var buffer: [Tty.reply_capacity]u8 = undefined;
-    try std.testing.expect(Tty.enterQuietMode(pipe[0]) == null);
+    try std.testing.expect(!Tty.enterQuietMode(pipe[0]));
     try std.testing.expectEqual(@as(?[]const u8, null), Tty.readReply(pipe[0], &buffer));
 }
 

@@ -207,6 +207,22 @@ Nothing rounds up. A command that took 59.9 seconds is not a minute, and one
 that took 1.9 is not two: the number is truncated, so it can only understate by
 less than the unit shown.
 
+### Putting the terminal back
+
+The query needs the terminal quiet for a moment, and the moment has to end well
+even if something else is happening. The first version remembered the whole
+`termios` struct before the query and replayed it afterwards, which is wrong
+when two shells start at once: both detect, the second snapshots the first one's
+quiet mode, and the last restore puts that quiet mode back — a terminal with no
+echo and no line editing, looking like a broken shell.
+
+So the way back does not replay a snapshot. It reads the terminal as it is now
+and turns the four flags it turned off back on. That is idempotent and
+order-independent: however the two detections interleave, the last one out
+leaves a cooked terminal. The four flags are not a guess — echo, `ECHONL`,
+canonical input and `ICRNL` are what a shell has, and detection only ever runs
+from a shell.
+
 ## The palette
 
 The only input is the terminal background. Everything else is derived in Oklab
