@@ -21,7 +21,10 @@ pub const Runner = struct {
     /// Overrides the `PATH` search; tests and embedders use it.
     search_path: ?[]const u8 = null,
 
-    /// A command that has not finished by now is killed and reported as failed.
+    /// A command that has not finished this many milliseconds after it started
+    /// is killed and reported as failed. It is one deadline for the whole run,
+    /// not a limit on each read: a program that dribbles a byte every little
+    /// while would otherwise hold the prompt open for as long as it liked.
     timeout_ms: i32 = 2_000,
 
     /// The syscall behind `run`. Injectable because a failed fork cannot be
@@ -73,8 +76,11 @@ pub const Runner = struct {
         _ = linux.close(write_end);
 
         var filled: usize = 0;
+        const deadline = monotonicMilliseconds() + self.timeout_ms;
         while (filled < stdout.len) {
-            if (!syscall.ready(read_end, self.timeout_ms)) break;
+            const left = remaining(deadline, monotonicMilliseconds());
+            if (left <= 0) break;
+            if (!syscall.ready(read_end, left)) break;
             const received = posix.read(read_end, stdout[filled..]) catch 0;
             if (received == 0) break;
             filled += received;
@@ -95,6 +101,19 @@ pub const Runner = struct {
         if (status & 0x7f != 0) return null;
         if ((status & 0xff00) >> 8 != 0) return null;
         return stdout[0..filled];
+    }
+
+    /// What is left of the deadline, in milliseconds; zero once it has passed.
+    fn remaining(deadline: i64, now: i64) i32 {
+        const left = deadline - now;
+        if (left <= 0) return 0;
+        return @intCast(@min(left, std.math.maxInt(i32)));
+    }
+
+    fn monotonicMilliseconds() i64 {
+        var timestamp: linux.timespec = .{ .sec = 0, .nsec = 0 };
+        if (linux.errno(linux.clock_gettime(linux.CLOCK.MONOTONIC, &timestamp)) != .SUCCESS) return 0;
+        return @as(i64, timestamp.sec) * 1000 + @divTrunc(timestamp.nsec, 1_000_000);
     }
 
     /// The fork result as a child pid, or null when the fork failed.
@@ -300,6 +319,24 @@ test "an endless writer cannot fill the prompt or hang it" {
         &output,
     );
     try std.testing.expectEqual(@as(?[]const u8, null), result);
+}
+
+test "what is left of the deadline is a countdown, never negative" {
+    try std.testing.expectEqual(@as(i32, 0), Runner.remaining(1_000, 1_500));
+    try std.testing.expectEqual(@as(i32, 0), Runner.remaining(1_000, 1_000));
+    try std.testing.expectEqual(@as(i32, 250), Runner.remaining(1_000, 750));
+    try std.testing.expectEqual(std.math.maxInt(i32), Runner.remaining(std.math.maxInt(i64), 0));
+}
+
+test "a command that dribbles is cut off at the deadline, not at the next byte" {
+    var runner = testRunner(null);
+    runner.timeout_ms = 120;
+    var output: [256]u8 = undefined;
+    const dribble = "i=0; while [ $i -lt 20 ]; do printf a; i=$((i+1)); sleep 0.04; done";
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        runner.command().run(&.{ "/bin/sh", "-c", dribble }, &output),
+    );
 }
 
 test "a search path entry that does not fit is skipped, not truncated" {
