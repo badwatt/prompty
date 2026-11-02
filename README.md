@@ -85,14 +85,15 @@ microseconds. A Nerd Font is needed for the glyphs.
 
 ```
 prompty render [--shell=zsh|bash|plain] [--no-color]   print the prompt
-               [-g|--git] [-d|--duration]              git status, and the time
-                                                       at the right edge
+               [-c|--color] [-g|--git]                 color, git status
+               [-d|--duration]                         the time, at the right edge
 prompty init zsh|bash [-d|--duration]                  print the shell integration
 prompty theme [detect [--force]]                       print (or redetect) the palette
 prompty version                                        print name and version
 ```
 
-A boolean flag on its own means true, so `-d`, `--duration` and `--duration=true`
+`--no-color` is the same switch as `-c=false`, kept because it is the one you
+remember. A boolean flag on its own means true, so `-d`, `--duration` and `--duration=true`
 are the same thing, and `--git=false` (or `-g=false`) is how the flag that
 defaults to true is turned off. The value has to come after an `=`: anything
 else there is a usage error rather than a guess.

@@ -233,7 +233,8 @@ const usage =
     "usage: " ++ metadata.name ++ " <command>\n" ++
     "\n" ++
     "  render [--shell=zsh|bash|plain] [--no-color]   print the prompt\n" ++
-    "         [-g|--git] [-d|--duration]               git status / the time\n" ++
+    "         [-c|--color] [-g|--git]                  colour, git status\n" ++
+    "         [-d|--duration]                          the time, at the edge\n" ++
     "  init zsh|bash [-d|--duration]                  print the shell integration\n" ++
     "  theme [detect [--force]]                       print (or redetect) the palette\n" ++
     "  version                                        print name and version\n" ++
