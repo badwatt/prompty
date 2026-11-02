@@ -112,6 +112,21 @@ finally a mark if that command failed.
 | detail       | `$DIRENV_DIFF`; how long the last command took (`$PROMTY_LAST_DURATION_MS`, dimmed, yellow past 2 s, red past 10 s); the clock          |
 | last command | a red `×` when it failed (`$PROMTY_LAST_EXIT`)                                                                                          |
 
+### Over SSH it says which machine you are on
+
+When the shell was reached over the network (`SSH_CONNECTION`, `SSH_CLIENT` or
+`SSH_TTY`), the first segment shows the machine's name instead of yours:
+
+```
+ zenon    …/prompty    main !   14:32 ❯         ← ssh into zenon
+ badwatt  …/prompty    main !   14:32 ❯         ← locally
+```
+
+Only the first label is shown (`build-01.example.com` is `build-01`), because
+that is the part that tells machines apart. The name comes from the kernel's
+`uname`, not from `$HOSTNAME`, which zsh does not export; a machine that cannot
+say its name falls back to the user name.
+
 ### The last command's duration, against the right edge
 
 `-d`/`--duration` (or `programs.prompty.duration`) moves the duration out of the

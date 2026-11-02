@@ -230,6 +230,7 @@ pub const FakeHost = struct {
     out: FakeOutput = .{},
     diagnostics: FakeOutput = .{},
     user_id: u32 = 1000,
+    hostname: ?[]const u8 = null,
 
     pub fn host(self: *FakeHost) ports.Host {
         return .{
@@ -241,6 +242,7 @@ pub const FakeHost = struct {
             .stdout = self.out.output(),
             .stderr = self.diagnostics.output(),
             .user_id = self.user_id,
+            .hostname = self.hostname,
         };
     }
 

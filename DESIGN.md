@@ -229,6 +229,18 @@ input and a `CR` that no longer turns into a newline. The tests use a real
 pseudo-terminal for this, because the part that can go wrong is exactly the
 terminal state, and a pipe has none.
 
+## Who the first segment is about
+
+Locally, a prompt answers "who am I". Over SSH the question that matters is
+"which machine am I on", so the first segment shows the hostname instead — the
+same slot, a different fact. The name is the kernel's: `$HOSTNAME` is a shell
+variable and zsh keeps it out of the environment, so `uname` is what is asked,
+once, in the composition root. Only the first label is shown: `build-01` tells
+machines apart where `build-01.example.com` mostly repeats the domain.
+
+Root keeps the red surface over SSH, because that colour is about privileges and
+not about where you are.
+
 ## Shell escaping
 
 Getting this wrong corrupts line editing, so it is one function with a test per

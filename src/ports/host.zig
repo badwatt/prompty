@@ -122,4 +122,7 @@ pub const Host = struct {
     stdout: Output,
     stderr: Output,
     user_id: u32,
+    /// This machine's name, when it could be read. A prompt reached over SSH
+    /// says which machine it is instead of who you are there.
+    hostname: ?[]const u8 = null,
 };

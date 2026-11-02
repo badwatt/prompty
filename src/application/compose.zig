@@ -43,8 +43,18 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
         .color = options.color and colorAllowed(host),
         .path = "/",
     };
-    if (host.environ.get("USER") orelse host.environ.get("LOGNAME")) |user| {
-        model.user = store.dupeDisplay(user, prompt.max_user_bytes);
+    // Over SSH the useful question is "which machine am I on", so the segment
+    // shows the hostname; anywhere else it shows who you are.
+    if (remote(host)) {
+        if (host.hostname) |name| {
+            const short = shortHostname(name);
+            if (short.len > 0) model.user = store.dupeDisplay(short, prompt.max_user_bytes);
+        }
+    }
+    if (model.user == null) {
+        if (host.environ.get("USER") orelse host.environ.get("LOGNAME")) |user| {
+            model.user = store.dupeDisplay(user, prompt.max_user_bytes);
+        }
     }
     model.is_root = host.user_id == 0;
 
@@ -208,6 +218,25 @@ fn readStatus(host: ports.Host, mode: StatusMode) ?git_status_mod.Report {
     return git_status_mod.parse(records);
 }
 
+/// Whether this shell was reached over the network. `SSH_CONNECTION` is set by a
+/// server for the session; the other two catch older or proxied setups.
+fn remote(host: ports.Host) bool {
+    for ([_][]const u8{ "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY" }) |name| {
+        if (host.environ.get(name)) |value| {
+            if (value.len > 0) return true;
+        }
+    }
+    return false;
+}
+
+/// The first label of a hostname: `build-01.example.com` is shown as `build-01`,
+/// which is the part that tells machines apart.
+fn shortHostname(name: []const u8) []const u8 {
+    const end = std.mem.indexOfScalar(u8, name, '.') orelse return name;
+    if (end == 0) return name;
+    return name[0..end];
+}
+
 fn colorAllowed(host: ports.Host) bool {
     if (host.environ.get("NO_COLOR") != null) return false;
     if (host.environ.get("TERM")) |term| {
@@ -327,6 +356,48 @@ test "without the option the duration stays on the line" {
     }));
     const model = harness.model(.{});
     try std.testing.expectEqual(prompt.DurationPlacement.line, model.duration_placement);
+}
+
+test "over ssh the segment says which machine you are on" {
+    const ssh = default_environment ++ [_][2][]const u8{
+        .{ "SSH_CONNECTION", "10.0.0.1 51000 10.0.0.2 22" },
+    };
+    var harness = FakeHarness.init(&ssh);
+    harness.host.hostname = "build-01.example.com";
+    const model = harness.model(.{});
+    // The first label: it is what tells machines apart.
+    try std.testing.expectEqualStrings("build-01", model.user.?);
+
+    // A local shell still says who you are.
+    var local = FakeHarness.init(&default_environment);
+    local.host.hostname = "build-01.example.com";
+    try std.testing.expectEqualStrings("dev", local.model(.{}).user.?);
+
+    // The other two spellings of "there is a server on the other end".
+    for ([_][]const u8{ "SSH_CLIENT", "SSH_TTY" }) |name| {
+        var harness_with = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ name, "x" }}));
+        harness_with.host.hostname = "pi";
+        try std.testing.expectEqualStrings("pi", harness_with.model(.{}).user.?);
+    }
+
+    // An empty variable is not a session, and a machine with no name falls back
+    // to the user name rather than showing an empty segment.
+    var empty = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        .{ "SSH_CONNECTION", "" },
+    }));
+    empty.host.hostname = "pi";
+    try std.testing.expectEqualStrings("dev", empty.model(.{}).user.?);
+
+    var unnamed = FakeHarness.init(&ssh);
+    try std.testing.expectEqualStrings("dev", unnamed.model(.{}).user.?);
+
+    // root over ssh is still root: the colour is about privileges.
+    var as_root = FakeHarness.init(&ssh);
+    as_root.host.hostname = "build-01.example.com";
+    as_root.host.user_id = 0;
+    const root_model = as_root.model(.{});
+    try std.testing.expectEqualStrings("build-01", root_model.user.?);
+    try std.testing.expect(root_model.is_root);
 }
 
 test "an absurdly long user name cannot take over the line" {

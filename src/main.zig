@@ -34,6 +34,14 @@ pub fn entry(minimal: std.process.Init.Minimal) u8 {
 
     var runner = command_adapter.Runner{ .block = minimal.environ.block.slice };
 
+    // `$HOSTNAME` is a shell variable, not an exported one: zsh does not put it
+    // in the environment, so the kernel is asked instead.
+    var uts: linux.utsname = undefined;
+    const hostname: ?[]const u8 = if (linux.errno(linux.uname(&uts)) == .SUCCESS)
+        std.mem.sliceTo(uts.nodename[0..], 0)
+    else
+        null;
+
     const host: ports.Host = .{
         .files = files,
         .environ = environment.environ(),
@@ -43,6 +51,7 @@ pub fn entry(minimal: std.process.Init.Minimal) u8 {
         .stdout = out_adapter.Out.stdout.output(),
         .stderr = out_adapter.Out.stderr.output(),
         .user_id = linux.getuid(),
+        .hostname = hostname,
     };
 
     var argument_buffer: [args_mod.max_arguments][]const u8 = undefined;
