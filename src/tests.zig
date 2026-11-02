@@ -8,6 +8,7 @@ test {
     _ = @import("application/cli.zig");
     _ = @import("application/compose.zig");
     _ = @import("application/metadata.zig");
+    _ = @import("application/repository.zig");
     _ = @import("application/shell_init.zig");
 
     _ = @import("domain/cache.zig");
@@ -35,4 +36,5 @@ test {
     _ = @import("adapters/tzif.zig");
 
     _ = @import("test_support/fakes.zig");
+    _ = @import("test_support/harness.zig");
 }

@@ -37,8 +37,8 @@ pub const max_user_bytes = 64;
 pub const DurationPlacement = enum {
     /// Dimmed, after the pill, as part of the line.
     line,
-    /// Bold, in milliseconds, against the right edge of the terminal: the one
-    /// thing a prompt puts there, out of the way of the line itself.
+    /// Bold, against the right edge of the terminal: the one thing a prompt
+    /// puts there, out of the way of the line itself.
     right,
 };
 
@@ -153,8 +153,7 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
     if (model.duration_placement == .line) {
         if (model.duration_ms) |milliseconds| {
             extras.begin(durationColor(&model.theme, milliseconds));
-            var human: [duration_mod.max_length]u8 = undefined;
-            extras.text(duration_mod.format(&human, milliseconds));
+            writeDuration(&canvas, milliseconds);
         }
     }
     if (model.time) |now| {
@@ -179,11 +178,9 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
     if (model.duration_placement == .right) {
         const line_length = canvas.len;
         if (model.duration_ms) |milliseconds| {
-            var digits: [duration_mod.max_length]u8 = undefined;
-            const label = duration_mod.format(&digits, milliseconds);
             paint(&canvas, model.theme.yellow, null);
             canvas.escape(bold_on);
-            canvas.text(label);
+            writeDuration(&canvas, milliseconds);
             canvas.escape(bold_off);
             reset(&canvas);
         }
@@ -193,6 +190,11 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
         };
     }
     return .{ .line = canvas.bytes() };
+}
+
+fn writeDuration(canvas: *Canvas, milliseconds: u64) void {
+    var digits: [duration_mod.max_length]u8 = undefined;
+    canvas.text(duration_mod.format(&digits, milliseconds));
 }
 
 fn durationColor(theme: *const theme_mod.Theme, milliseconds: u64) Rgb {

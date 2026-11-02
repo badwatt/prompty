@@ -40,6 +40,8 @@ pub const Tty = struct {
 
     pub const instance: Tty = .{};
 
+    const read_write = linux.O{ .ACCMODE = .RDWR, .NOCTTY = true, .CLOEXEC = true };
+
     pub fn terminal(self: *const Tty) ports.Terminal {
         return .{
             .ptr = @ptrCast(@constCast(self)),
@@ -53,11 +55,7 @@ pub const Tty = struct {
         const self: *const Tty = @ptrCast(@alignCast(ptr));
         std.debug.assert(buffer.len >= reply_capacity);
 
-        const device = posix.openat(linux.AT.FDCWD, self.device_path, .{
-            .ACCMODE = .RDWR,
-            .NOCTTY = true,
-            .CLOEXEC = true,
-        }, 0) catch return null;
+        const device = posix.openat(linux.AT.FDCWD, self.device_path, read_write, 0) catch return null;
         defer _ = linux.close(device);
 
         const guard = SignalGuard.install();
@@ -157,11 +155,7 @@ const Pty = struct {
     number: u32,
 
     fn open() Pty {
-        const master = posix.openat(linux.AT.FDCWD, "/dev/ptmx", .{
-            .ACCMODE = .RDWR,
-            .NOCTTY = true,
-            .CLOEXEC = true,
-        }, 0) catch unreachable;
+        const master = posix.openat(linux.AT.FDCWD, "/dev/ptmx", Tty.read_write, 0) catch unreachable;
 
         var unlock: i32 = 0;
         std.debug.assert(linux.errno(linux.ioctl(master, TIOCSPTLCK, @intFromPtr(&unlock))) == .SUCCESS);
@@ -170,11 +164,7 @@ const Pty = struct {
 
         var name: [32]u8 = undefined;
         const device_path = std.fmt.bufPrint(&name, "/dev/pts/{d}", .{number}) catch unreachable;
-        const slave = posix.openat(linux.AT.FDCWD, device_path, .{
-            .ACCMODE = .RDWR,
-            .NOCTTY = true,
-            .CLOEXEC = true,
-        }, 0) catch unreachable;
+        const slave = posix.openat(linux.AT.FDCWD, device_path, Tty.read_write, 0) catch unreachable;
         return .{ .master = master, .slave = slave, .number = number };
     }
 

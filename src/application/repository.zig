@@ -72,36 +72,6 @@ pub fn hasStash(host: ports.Host, git_dir: []const u8) bool {
     return existsIn(host, git_dir, "logs/refs/stash", &scratch);
 }
 
-fn probeRepository(
-    host: ports.Host,
-    working_directory: []const u8,
-    store: *store_mod.Store,
-    git_dir_buffer: []u8,
-) ?Probe {
-    std.debug.assert(git_dir_buffer.len >= path_mod.scratch_bytes);
-    var head_buffer: [git_mod.max_head_bytes]u8 = undefined;
-
-    var directory = working_directory;
-    var walked: u8 = 0;
-    while (true) {
-        std.debug.assert(walked < max_git_walk);
-        walked += 1;
-        if (locate(host, directory, git_dir_buffer, &head_buffer)) |located| {
-            const operation = operationIn(host, located.git_dir);
-            const branch = switch (located.head) {
-                .named => |name| store.dupePrintable(name),
-                .detached => |commit| store.dupePrintable(git_mod.short(commit)),
-            };
-            return .{
-                .root = located.root,
-                .git_dir = located.git_dir,
-                .git = .{ .branch = branch, .operation = operation },
-            };
-        }
-        directory = parent(directory) orelse return null;
-    }
-}
-
 fn locate(
     host: ports.Host,
     directory: []const u8,

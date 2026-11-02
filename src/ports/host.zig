@@ -1,6 +1,7 @@
 //! The ports. Everything the prompt needs from the outside world goes through
-//! one of these four interfaces, which is what makes the whole renderer
-//! testable without touching a filesystem, a clock or a terminal.
+//! one of these interfaces — files, environment, clock, commands, terminal and
+//! output — which is what makes the whole renderer testable without touching a
+//! filesystem, a clock or a terminal.
 
 const std = @import("std");
 

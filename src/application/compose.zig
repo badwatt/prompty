@@ -107,14 +107,18 @@ pub fn background(host: ports.Host) theme_mod.Rgb {
 
 pub fn cachedBackground(host: ports.Host) ?theme_mod.Rgb {
     var path_buffer: [cache_mod.max_path_bytes]u8 = undefined;
-    const location = cache_mod.path(
-        &path_buffer,
-        host.environ.get("XDG_CACHE_HOME"),
-        host.environ.get("HOME"),
-    ) orelse return null;
+    const location = cacheLocation(host, &path_buffer) orelse return null;
     var contents: [64]u8 = undefined;
     const stored = host.files.read(location, &contents) orelse return null;
     return theme_mod.Rgb.parse(std.mem.trim(u8, stored, " \t\r\n"));
+}
+
+fn cacheLocation(host: ports.Host, buffer: []u8) ?[]const u8 {
+    return cache_mod.path(
+        buffer,
+        host.environ.get("XDG_CACHE_HOME"),
+        host.environ.get("HOME"),
+    );
 }
 
 /// Asks the terminal for its background. This is the only code path in prompty
@@ -127,11 +131,7 @@ pub fn detectBackground(host: ports.Host) ?theme_mod.Rgb {
 
 pub fn rememberBackground(host: ports.Host, color: theme_mod.Rgb) bool {
     var path_buffer: [cache_mod.max_path_bytes]u8 = undefined;
-    const location = cache_mod.path(
-        &path_buffer,
-        host.environ.get("XDG_CACHE_HOME"),
-        host.environ.get("HOME"),
-    ) orelse return false;
+    const location = cacheLocation(host, &path_buffer) orelse return false;
     var line: [8]u8 = undefined;
     const contents = std.fmt.bufPrint(&line, "#{x:0>2}{x:0>2}{x:0>2}\n", .{
         color.r,
@@ -206,10 +206,7 @@ fn readStatus(host: ports.Host, mode: StatusMode) ?git_status_mod.Report {
         "--no-ahead-behind",
         "-z",
     };
-    const argv: []const [:0]const u8 = switch (mode) {
-        .fast => &fast,
-        .full, .off => &full,
-    };
+    const argv: []const [:0]const u8 = if (mode == .fast) &fast else &full;
     const records = host.commands.run(argv, &status_output) orelse return null;
     return git_status_mod.parse(records);
 }
@@ -269,50 +266,13 @@ fn direnvActive(host: ports.Host) bool {
 }
 
 const fakes = @import("../test_support/fakes.zig");
+const harness_mod = @import("../test_support/harness.zig");
 
-const project_directories = [_][]const u8{"/home/dev/proj"};
-
-const project_sources = [_]fakes.FakeFiles.File{
-    .{ .path = "/home/dev/proj/.git/HEAD", .contents = "ref: refs/heads/main\n" },
-};
-
-const FakeHarness = struct {
-    files: fakes.FakeFiles,
-    environment: fakes.FakeEnv,
-    clock: fakes.FakeClock = .{},
-    terminal: fakes.FakeTerminal = .{},
-    host: fakes.FakeHost,
-    store: store_mod.Store = undefined,
-
-    fn init(environment: []const [2][]const u8) FakeHarness {
-        var harness = FakeHarness{
-            .files = fakes.FakeFiles.withDirectories(&project_sources, &project_directories),
-            .environment = fakes.FakeEnv.init(environment),
-            .host = undefined,
-        };
-        harness.host = .{
-            .files = harness.files,
-            .environment = harness.environment,
-            .clock = harness.clock,
-            .terminal = harness.terminal,
-        };
-        harness.store.reset();
-        return harness;
-    }
-
-    fn model(self: *FakeHarness, options: Options) prompt.Model {
-        return build(self.host.host(), &self.store, options);
-    }
-};
-
-const default_environment = [_][2][]const u8{
-    .{ "USER", "dev" },
-    .{ "HOME", "/home/dev" },
-    .{ "PWD", "/home/dev/proj" },
-};
-
+const Harness = harness_mod.Harness;
+const default_environment = harness_mod.default_environment;
+const status_porcelain = harness_mod.status_porcelain;
 test "collects every fact from a fake project" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     const model = harness.model(.{});
 
     try std.testing.expectEqualStrings("dev", model.user.?);
@@ -327,7 +287,7 @@ test "the right edge is zsh's, so only zsh gets it" {
         .{ "PROMTY_LAST_DURATION_MS", "1234" },
     };
     for ([_]canvas.Shell{ .zsh, .bash, .plain }) |shell| {
-        var harness = FakeHarness.init(&environment);
+        var harness = Harness.init(&environment);
         const model = harness.model(.{ .duration = true, .shell = shell });
         const expected: prompt.DurationPlacement =
             if (shell == .zsh) .right else .line;
@@ -337,7 +297,7 @@ test "the right edge is zsh's, so only zsh gets it" {
 }
 
 test "without the option the duration stays on the line" {
-    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "PROMTY_LAST_DURATION_MS", "1234" },
     }));
     const model = harness.model(.{});
@@ -348,31 +308,31 @@ test "over ssh the segment says which machine you are on" {
     const ssh = default_environment ++ [_][2][]const u8{
         .{ "SSH_CONNECTION", "10.0.0.1 51000 10.0.0.2 22" },
     };
-    var harness = FakeHarness.init(&ssh);
+    var harness = Harness.init(&ssh);
     harness.host.hostname = "build-01.example.com";
     const model = harness.model(.{});
     try std.testing.expectEqualStrings("build-01", model.user.?);
 
-    var local = FakeHarness.init(&default_environment);
+    var local = Harness.init(&default_environment);
     local.host.hostname = "build-01.example.com";
     try std.testing.expectEqualStrings("dev", local.model(.{}).user.?);
 
     for ([_][]const u8{ "SSH_CLIENT", "SSH_TTY" }) |name| {
-        var harness_with = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ name, "x" }}));
+        var harness_with = Harness.init(&(default_environment ++ [_][2][]const u8{.{ name, "x" }}));
         harness_with.host.hostname = "pi";
         try std.testing.expectEqualStrings("pi", harness_with.model(.{}).user.?);
     }
 
-    var empty = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var empty = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "SSH_CONNECTION", "" },
     }));
     empty.host.hostname = "pi";
     try std.testing.expectEqualStrings("dev", empty.model(.{}).user.?);
 
-    var unnamed = FakeHarness.init(&ssh);
+    var unnamed = Harness.init(&ssh);
     try std.testing.expectEqualStrings("dev", unnamed.model(.{}).user.?);
 
-    var as_root = FakeHarness.init(&ssh);
+    var as_root = Harness.init(&ssh);
     as_root.host.hostname = "build-01.example.com";
     as_root.host.user_id = 0;
     const root_model = as_root.model(.{});
@@ -382,7 +342,7 @@ test "over ssh the segment says which machine you are on" {
 
 test "an absurdly long user name cannot take over the line" {
     const long_name: [1000]u8 = @splat('u');
-    var harness = FakeHarness.init(&.{
+    var harness = Harness.init(&.{
         .{ "USER", &long_name },
         .{ "HOME", "/home/dev" },
         .{ "PWD", "/home/dev/proj" },
@@ -393,7 +353,7 @@ test "an absurdly long user name cannot take over the line" {
 }
 
 test "a root shell is marked and can be rendered" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.user_id = 0;
     const model = harness.model(.{ .color = false, .shell = .plain });
     try std.testing.expect(model.is_root);
@@ -405,13 +365,13 @@ test "a root shell is marked and can be rendered" {
 
 test "the working directory falls back to getcwd and then to root" {
     {
-        var harness = FakeHarness.init(&.{.{ "HOME", "/home/dev" }});
+        var harness = Harness.init(&.{.{ "HOME", "/home/dev" }});
         harness.host.files.directories = &.{};
         try std.testing.expectEqualStrings("/", harness.model(.{}).path);
     }
     {
         const directories = [_][]const u8{"/home/dev/scratch"};
-        var harness = FakeHarness.init(&.{ .{ "HOME", "/home/dev" }, .{ "PWD", "relative" } });
+        var harness = Harness.init(&.{ .{ "HOME", "/home/dev" }, .{ "PWD", "relative" } });
         harness.host.files.directories = &directories;
         try std.testing.expectEqualStrings("~/scratch", harness.model(.{}).path);
     }
@@ -426,7 +386,7 @@ test "repository state is read from marker files" {
         "/home/dev/proj",
         "/home/dev/proj/.git/rebase-merge",
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.files.directories = &directories;
 
@@ -441,7 +401,7 @@ test "worktrees find their git directory through the gitfile" {
         .{ .path = "/home/dev/proj/.git/worktrees/wt/HEAD", .contents = "ref: refs/heads/wt\n" },
         .{ .path = "/home/dev/proj/.git/worktrees/wt/MERGE_HEAD", .contents = "abc\n" },
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.environment = .{ .entries = &.{
         .{ "HOME", "/home/dev" },
@@ -458,7 +418,7 @@ test "a relative gitfile resolves against its own directory" {
         .{ .path = "/home/dev/sub/.git", .contents = "gitdir: ../.git/modules/sub\n" },
         .{ .path = "/home/dev/sub/../.git/modules/sub/HEAD", .contents = "ref: refs/heads/sub\n" },
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.environment = .{ .entries = &.{
         .{ "HOME", "/home/dev" },
@@ -473,7 +433,7 @@ test "walking up finds an enclosing repository" {
     const sources = [_]fakes.FakeFiles.File{
         .{ .path = "/home/dev/big/.git/HEAD", .contents = "ref: refs/heads/mono\n" },
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.environment = .{ .entries = &.{
         .{ "HOME", "/home/dev" },
@@ -484,13 +444,13 @@ test "walking up finds an enclosing repository" {
 }
 
 test "no repository means no git segment" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &.{};
     try std.testing.expectEqual(@as(?prompt.Git, null), harness.model(.{}).git);
 }
 
 test "the clock is read through the port" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.clock = .{ .unix_seconds = 0, .offset_seconds = 3_600 };
     const model = harness.model(.{});
     try std.testing.expectEqual(@as(u8, 1), model.time.?.hour);
@@ -499,7 +459,7 @@ test "the clock is read through the port" {
 
 test "duration and exit status are read from the shell's environment" {
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_LAST_DURATION_MS", "1234" },
             .{ "PROMTY_LAST_EXIT", "130" },
         }));
@@ -508,7 +468,7 @@ test "duration and exit status are read from the shell's environment" {
         try std.testing.expectEqual(@as(?u8, 130), model.exit_code);
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_LAST_DURATION_MS", "0" },
             .{ "PROMTY_LAST_EXIT", "not-a-code" },
         }));
@@ -517,7 +477,7 @@ test "duration and exit status are read from the shell's environment" {
         try std.testing.expectEqual(@as(?u8, null), model.exit_code);
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_LAST_DURATION_MS", "999999999999" },
         }));
         try std.testing.expectEqual(@as(?u64, null), harness.model(.{}).duration_ms);
@@ -525,32 +485,32 @@ test "duration and exit status are read from the shell's environment" {
 }
 
 test "a command longer than a day is still a duration" {
-    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "PROMTY_LAST_DURATION_MS", "259200000" },
     }));
     try std.testing.expectEqual(@as(?u64, 259_200_000), harness.model(.{}).duration_ms);
 }
 
 test "direnv is visible without running it" {
-    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "DIRENV_DIFF", "eJx..." },
     }));
     try std.testing.expect(harness.model(.{}).direnv);
 
-    var idle = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var idle = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "DIRENV_DIFF", "" },
     }));
     try std.testing.expect(!idle.model(.{}).direnv);
 }
 
 test "colour is disabled by NO_COLOR and by a dumb terminal" {
-    var plain = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "NO_COLOR", "1" }}));
+    var plain = Harness.init(&(default_environment ++ [_][2][]const u8{.{ "NO_COLOR", "1" }}));
     try std.testing.expect(!plain.model(.{}).color);
 
-    var dumb = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "dumb" }}));
+    var dumb = Harness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "dumb" }}));
     try std.testing.expect(!dumb.model(.{}).color);
 
-    var colourful = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "xterm-256color" }}));
+    var colourful = Harness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "xterm-256color" }}));
     try std.testing.expect(colourful.model(.{}).color);
 
     try std.testing.expect(!colourful.model(.{ .color = false }).color);
@@ -561,19 +521,19 @@ const light_background = theme_mod.Rgb{ .r = 0xf5, .g = 0xf5, .b = 0xf5 };
 
 test "the background comes from an override, then the cache, then the default" {
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_BACKGROUND", "#f5f5f5" },
         }));
         try std.testing.expectEqual(light_background, background(harness.host.host()));
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_BACKGROUND", "bright-green" },
         }));
         try std.testing.expectEqual(default_theme_background, background(harness.host.host()));
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "XDG_CACHE_HOME", "/cache" },
         }));
         harness.host.files.sources = &.{
@@ -583,21 +543,21 @@ test "the background comes from an override, then the cache, then the default" {
         try std.testing.expectEqual(light_background, cachedBackground(harness.host.host()).?);
     }
     {
-        var harness = FakeHarness.init(&default_environment);
+        var harness = Harness.init(&default_environment);
         harness.host.files.sources = &.{
             .{ .path = "/home/dev/.cache/prompty/theme", .contents = "not a colour" },
         };
         try std.testing.expectEqual(default_theme_background, background(harness.host.host()));
     }
     {
-        var harness = FakeHarness.init(&.{});
+        var harness = Harness.init(&.{});
         try std.testing.expectEqual(default_theme_background, background(harness.host.host()));
         try std.testing.expectEqual(@as(?theme_mod.Rgb, null), cachedBackground(harness.host.host()));
     }
 }
 
 test "detection asks the terminal and the answer is remembered" {
-    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "XDG_CACHE_HOME", "/cache" },
     }));
     harness.host.terminal = .{ .response = "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\" };
@@ -612,7 +572,7 @@ test "detection asks the terminal and the answer is remembered" {
 }
 
 test "detection fails cleanly and is not remembered without a cache location" {
-    var harness = FakeHarness.init(&.{});
+    var harness = Harness.init(&.{});
     try std.testing.expectEqual(@as(?theme_mod.Rgb, null), detectBackground(harness.host.host()));
 
     harness.host.terminal = .{ .response = "garbage" };
@@ -621,18 +581,8 @@ test "detection fails cleanly and is not remembered without a cache location" {
     try std.testing.expect(!rememberBackground(harness.host.host(), default_theme_background));
 }
 
-const status_porcelain =
-    "# branch.oid 1cec0eae51f1f82b5bb5290d9309f73728b04aba\x00" ++
-    "# branch.head main\x00" ++
-    "# branch.upstream origin/main\x00" ++
-    "# branch.ab +2 -1\x00" ++
-    "1 .M N... 100644 100644 100644 aaaaaaa aaaaaaa src/modified.zig\x00" ++
-    "1 M. N... 100644 100644 100644 aaaaaaa aaaaaaa src/staged.zig\x00" ++
-    "1 .D N... 100644 100644 000000 aaaaaaa aaaaaaa src/deleted.zig\x00" ++
-    "? src/untracked.zig\x00";
-
 test "the working tree status comes from one git invocation" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.commands.response = status_porcelain;
 
     const model = harness.model(.{});
@@ -652,7 +602,7 @@ test "the porcelain branch wins over the one read from disk" {
     const sources = [_]fakes.FakeFiles.File{
         .{ .path = "/home/dev/proj/.git/HEAD", .contents = "ref: refs/heads/stale\n" },
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.commands.response = status_porcelain;
 
@@ -663,7 +613,7 @@ test "a detached repository keeps the short commit from the porcelain" {
     const detached =
         "# branch.oid a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\x00" ++
         "# branch.head (detached)\x00";
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.commands.response = detached;
 
     const git = harness.model(.{}).git.?;
@@ -671,7 +621,7 @@ test "a detached repository keeps the short commit from the porcelain" {
 }
 
 test "the status cost can be capped without losing the branch" {
-    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "PROMTY_GIT", "fast" },
     }));
     harness.host.commands.response = status_porcelain;
@@ -683,7 +633,7 @@ test "the status cost can be capped without losing the branch" {
 }
 
 test "anything else is the full status" {
-    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+    var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
         .{ "PROMTY_GIT", "1" },
     }));
     harness.host.commands.response = status_porcelain;
@@ -694,7 +644,7 @@ test "anything else is the full status" {
 
 test "status can be switched off by the caller or the environment" {
     {
-        var harness = FakeHarness.init(&default_environment);
+        var harness = Harness.init(&default_environment);
         harness.host.commands.response = status_porcelain;
         const model = harness.model(.{ .git = false });
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
@@ -702,7 +652,7 @@ test "status can be switched off by the caller or the environment" {
         try std.testing.expectEqualStrings("main", model.git.?.branch);
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_GIT", "0" },
         }));
         harness.host.commands.response = status_porcelain;
@@ -710,14 +660,14 @@ test "status can be switched off by the caller or the environment" {
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_GIT", "false" },
         }));
         harness.host.commands.response = status_porcelain;
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
     }
     {
-        var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        var harness = Harness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_GIT", "1" },
         }));
         harness.host.commands.response = status_porcelain;
@@ -727,7 +677,7 @@ test "status can be switched off by the caller or the environment" {
 }
 
 test "a failing git leaves the fast path intact" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.commands.response = null;
 
     const git = harness.model(.{}).git.?;
@@ -737,7 +687,7 @@ test "a failing git leaves the fast path intact" {
 }
 
 test "garbage from git is a failure, not a wrong prompt" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.commands.response = "not porcelain at all";
     const git = harness.model(.{}).git.?;
     try std.testing.expectEqualStrings("main", git.branch);
@@ -745,10 +695,10 @@ test "garbage from git is a failure, not a wrong prompt" {
 }
 
 test "a stash is visible without asking git" {
-    const sources = project_sources ++ [_]fakes.FakeFiles.File{
+    const sources = harness_mod.project_sources ++ [_]fakes.FakeFiles.File{
         .{ .path = "/home/dev/proj/.git/refs/stash", .contents = "aaa\n" },
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.commands.response = null;
 
@@ -756,10 +706,10 @@ test "a stash is visible without asking git" {
 }
 
 test "a stashed reflog alone also counts" {
-    const sources = project_sources ++ [_]fakes.FakeFiles.File{
+    const sources = harness_mod.project_sources ++ [_]fakes.FakeFiles.File{
         .{ .path = "/home/dev/proj/.git/logs/refs/stash", .contents = "aaa\n" },
     };
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &sources;
     harness.host.commands.response = null;
 
@@ -767,7 +717,7 @@ test "a stashed reflog alone also counts" {
 }
 
 test "no repository means no git call at all" {
-    var harness = FakeHarness.init(&default_environment);
+    var harness = Harness.init(&default_environment);
     harness.host.files.sources = &.{};
     harness.host.commands.response = status_porcelain;
 

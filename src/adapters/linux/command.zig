@@ -68,8 +68,6 @@ pub const Runner = struct {
             _ = linux.close(read_end);
             _ = linux.dup2(write_end, posix.STDOUT_FILENO);
             _ = linux.close(write_end);
-            var empty = posix.sigemptyset();
-            posix.sigprocmask(posix.SIG.SETMASK, &empty, null);
             divert(self, argv[0], arguments);
         }
 
@@ -161,6 +159,7 @@ pub const Runner = struct {
 
         if (std.mem.indexOfScalar(u8, program, '/') != null) {
             execute(program, arguments, environment);
+            linux.exit_group(127);
         }
 
         const path = self.searchPath();

@@ -146,9 +146,11 @@ const bash_tail =
     "  esac\n" ++
     "fi\n";
 
-pub const bash_script = bash_head ++ bash_precmd_head ++
+const bash_render_head =
     "    local rendered\n" ++
-    "    rendered=\"$(PROMTY_LAST_EXIT=$exit_code " ++ metadata.name ++ bash_tail;
+    "    rendered=\"$(PROMTY_LAST_EXIT=$exit_code ";
+
+pub const bash_script = bash_head ++ bash_precmd_head ++ bash_render_head ++ metadata.name ++ bash_tail;
 
 /// bash has no right prompt, and lying about the width in `PS1` would break
 /// readline's redraw. The timing is wired up, and the number stays where bash
