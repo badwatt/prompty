@@ -72,10 +72,8 @@ pub fn parse(records: []const u8) ?Report {
             '#' => parseHeader(&report, record),
             '1' => _ = parseChanged(&report.status, record),
             '2' => {
-                if (parseChanged(&report.status, record)) {
-                    report.status.renamed +|= 1;
-                    skip_path = true;
-                }
+                if (parseChanged(&report.status, record)) report.status.renamed +|= 1;
+                skip_path = true;
             },
             'u' => report.status.conflicted +|= 1,
             '?' => report.status.untracked +|= 1,
@@ -169,6 +167,12 @@ test "every kind of change is counted once" {
     try std.testing.expectEqual(@as(u16, 1), status.conflicted);
     try std.testing.expectEqual(@as(u16, 2), status.untracked);
     try std.testing.expect(!status.isClean());
+}
+
+test "a truncated rename record does not let its old path count as a record" {
+    const status = parse("2 R\x00? src/untracked.zig\x00").?.status;
+    try std.testing.expectEqual(@as(u16, 0), status.untracked);
+    try std.testing.expectEqual(@as(u16, 0), status.renamed);
 }
 
 test "a file changed in both index and worktree counts twice" {
