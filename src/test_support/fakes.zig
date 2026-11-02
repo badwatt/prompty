@@ -59,11 +59,8 @@ pub const FakeFiles = struct {
     fn write(ptr: *anyopaque, path: []const u8, bytes: []const u8) bool {
         const self: *FakeFiles = @ptrCast(@alignCast(ptr));
         self.write_count += 1;
-        // A fake that truncates and reports success would let a test pass where
-        // the real adapter fails, so the limit is honest here too.
         if (bytes.len > self.write_storage.len - self.write_storage_used) return false;
         if (self.write_count > self.written.len) return false;
-        // Copy the bytes: the writer hands over a stack buffer it reuses.
         @memcpy(self.write_storage[self.write_storage_used..][0..bytes.len], bytes);
         self.written[self.write_count - 1] = .{
             .path = path,
@@ -86,7 +83,6 @@ pub const FakeFiles = struct {
 
     fn currentDir(ptr: *anyopaque, buffer: []u8) ?[]const u8 {
         const self: *FakeFiles = @ptrCast(@alignCast(ptr));
-        // The first directory is the working directory of the fixture.
         if (self.directories.len == 0) return null;
         const path = self.directories[0];
         if (path.len > buffer.len) return null;

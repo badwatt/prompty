@@ -60,16 +60,9 @@ pub const Tty = struct {
         }, 0) catch return null;
         defer _ = linux.close(device);
 
-        // A signal that arrives between changing the terminal state and
-        // restoring it would leave the terminal damaged: echo and canonical
-        // input off, carriage returns no longer translated. Block the signals
-        // that would kill the process for the length of the query, and let any
-        // pending one be delivered once the terminal is whole again.
         const guard = SignalGuard.install();
         defer guard.release();
 
-        // Without a terminal there is nothing to ask, and pretending otherwise
-        // would write a query into whatever the descriptor happens to be.
         const quiet = enterQuietMode(device) orelse return null;
         defer posix.tcsetattr(device, .NOW, quiet.saved) catch {};
 
@@ -121,15 +114,10 @@ pub const Tty = struct {
         var filled: usize = 0;
         var complete = false;
         var reads: u8 = 0;
-        // A reply arrives in one piece in practice; the bound exists so that a
-        // talkative terminal cannot spin here.
         while (reads < max_reads) : (reads += 1) {
-            // Once the reply is whole there is nothing left to wait for: look
-            // for stragglers and leave immediately if there are none.
             if (!syscall.ready(device, if (complete) 0 else timeout_ms)) break;
 
             if (complete) {
-                // Stragglers: read them and throw them away, or the shell will.
                 var discard: [32]u8 = undefined;
                 if ((posix.read(device, &discard) catch 0) == 0) break;
                 continue;
@@ -139,14 +127,10 @@ pub const Tty = struct {
             if (received == 0) break;
             filled += received;
             if (replyEnd(buffer[0..filled])) |end| {
-                // Whatever the terminal appended arrived in the same read, so it
-                // is already consumed: the answer ends at the terminator.
                 filled = end;
                 complete = true;
             }
         }
-        // A partial reply cannot be trusted, and leaving it in the queue is
-        // exactly the failure this function exists to avoid.
         if (!complete) return null;
         return buffer[0..filled];
     }
@@ -164,12 +148,6 @@ pub const Tty = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Tests. A real pseudo-terminal is used rather than a pipe: the whole point of
-// this adapter is how it drives the terminal, and a pipe has no terminal state
-// to get wrong.
-// ---------------------------------------------------------------------------
-
 const TIOCSPTLCK = 0x40045431;
 const TIOCGPTN = 0x80045430;
 
@@ -179,9 +157,6 @@ const Pty = struct {
     number: u32,
 
     fn open() Pty {
-        // A pseudo-terminal is a hard requirement of these tests: skipping
-        // instead would silently drop the coverage of the quiet-mode code,
-        // which is the part that must not break.
         const master = posix.openat(linux.AT.FDCWD, "/dev/ptmx", .{
             .ACCMODE = .RDWR,
             .NOCTTY = true,
@@ -225,8 +200,6 @@ test "asks the terminal in a quiet mode and reads the whole reply" {
     const pty = Pty.open();
     defer pty.close();
 
-    // The terminal answers before the question is asked, exactly like a fast
-    // terminal replying mid-write.
     pty.answer(reply_text);
 
     var path_buffer: [32]u8 = undefined;
@@ -250,7 +223,6 @@ test "the terminal is left exactly as it was found" {
     try std.testing.expectEqual(before.lflag.ECHO, after.lflag.ECHO);
     try std.testing.expectEqual(before.lflag.ICANON, after.lflag.ICANON);
     try std.testing.expectEqual(before.lflag.ISIG, after.lflag.ISIG);
-    // Echo was on before the query and is on again after it.
     try std.testing.expect(after.lflag.ECHO);
 }
 
@@ -264,8 +236,6 @@ test "nothing is left in the queue for the shell to read" {
     var buffer: [Tty.reply_capacity]u8 = undefined;
     _ = adapter.terminal().background(&buffer);
 
-    // Nothing remains on the input side for the shell to mistake for typed
-    // input: the whole answer was consumed.
     var descriptors = [_]linux.pollfd{.{
         .fd = pty.slave,
         .events = linux.POLL.IN,
@@ -273,7 +243,6 @@ test "nothing is left in the queue for the shell to read" {
     }};
     try std.testing.expectEqual(@as(usize, 0), linux.poll(&descriptors, descriptors.len, 50));
 
-    // And the question did reach the terminal, unterminated by any echo.
     var reply: [64]u8 = undefined;
     const echoed = try posix.read(pty.master, &reply);
     try std.testing.expect(std.mem.indexOf(u8, reply[0..echoed], Tty.query) != null);
@@ -296,13 +265,8 @@ test "without a controlling terminal nothing is written anywhere" {
 }
 
 test "stragglers that arrive after the reply are drained" {
-    // The reply fills the buffer exactly, so the bytes behind it are still in
-    // the queue when the terminator is recognised: they have to be read and
-    // thrown away, not left for the shell to read as typing.
     const pty = Pty.open();
     defer pty.close();
-    // Quiet mode, as `background` leaves the terminal: in canonical mode a read
-    // waits for a newline that an escape sequence never contains.
     const quiet = Tty.enterQuietMode(pty.slave).?;
     defer posix.tcsetattr(pty.slave, .NOW, quiet.saved) catch {};
     pty.answer(reply_text ++ "straggler");
@@ -321,8 +285,6 @@ test "stragglers that arrive after the reply are drained" {
 test "bytes that arrive with the reply are not left for the shell" {
     const pty = Pty.open();
     defer pty.close();
-    // Some terminals append to the answer. Whatever follows the terminator is
-    // not the reply, and leaving it queued means the shell reads it as typing.
     pty.answer(reply_text ++ "straggler");
 
     var path_buffer: [32]u8 = undefined;
@@ -339,7 +301,6 @@ test "bytes that arrive with the reply are not left for the shell" {
 }
 
 test "a descriptor that is not a terminal is refused" {
-    // A pipe has no terminal state, so no query is attempted on it.
     var pipe: [2]posix.fd_t = undefined;
     std.debug.assert(linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) == .SUCCESS);
     defer _ = linux.close(pipe[0]);
@@ -357,7 +318,6 @@ test "terminating signals are held only while the terminal is changed" {
     for (Tty.terminating_signals) |signal| {
         try std.testing.expect(posix.sigismember(&current, signal));
     }
-    // A signal that is not fatal for this window is left alone.
     try std.testing.expect(!posix.sigismember(&current, .USR1));
 
     guard.release();
@@ -372,7 +332,6 @@ test "the terminator is found wherever it lands" {
     try std.testing.expectEqual(@as(?usize, null), Tty.replyEnd("\x1b]11;rgb:1e1e"));
     try std.testing.expectEqual(@as(?usize, null), Tty.replyEnd("\x1b"));
     try std.testing.expectEqual(@as(?usize, reply_text.len), Tty.replyEnd(reply_text));
-    // A terminal that keeps talking does not hide the terminator.
     try std.testing.expectEqual(@as(?usize, reply_text.len), Tty.replyEnd(reply_text ++ "straggler"));
     try std.testing.expectEqual(@as(?usize, 1), Tty.replyEnd("\x07"));
 }

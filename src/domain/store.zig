@@ -79,7 +79,6 @@ test "control bytes become visible question marks" {
     store.reset();
     const printable = store.dupePrintable("a\nb\tc\x7f");
     try std.testing.expectEqualStrings("a?b?c?", printable);
-    // Ordinary text is untouched, including multi-byte characters.
     try std.testing.expectEqualStrings("ñandú/日本語", store.dupePrintable("ñandú/日本語"));
 }
 
@@ -120,21 +119,15 @@ test "a maximal prompt really fits, with room to spare" {
     try std.testing.expectEqual(@as(usize, prompt.max_user_bytes), store.dupeDisplay(&user, prompt.max_user_bytes).len);
     try std.testing.expectEqual(@as(usize, path.max_display_bytes), store.dupePrintable(&label).len);
     try std.testing.expectEqual(@as(usize, git.max_head_bytes), store.dupePrintable(&branch).len);
-    // Still room for the second copy of a branch name that a status read can
-    // bring with it.
     try std.testing.expectEqual(@as(usize, git.max_head_bytes), store.dupePrintable(&branch).len);
 }
 
 test "a claim larger than the store is clipped, not written past it" {
-    // An environment variable is whatever the parent process left there, so the
-    // store cannot trust a caller's length: it used to be a plain assertion,
-    // which the release build compiles away.
     var store: Store = undefined;
     store.reset();
     const granted = store.claim(Store.capacity + 100);
     try std.testing.expectEqual(@as(usize, Store.capacity), granted.len);
     try std.testing.expectEqual(@as(usize, Store.capacity), store.used);
-    // And once full it keeps handing out nothing rather than going backwards.
     try std.testing.expectEqual(@as(usize, 0), store.claim(1).len);
     try std.testing.expectEqual(@as(usize, 0), store.dupe("x").len);
 }
@@ -142,8 +135,6 @@ test "a claim larger than the store is clipped, not written past it" {
 test "a display name is cut short on a character boundary" {
     var store: Store = undefined;
     store.reset();
-    // "ñ" is two bytes: a cut that lands inside one has to step back, or the
-    // prompt would carry an invalid sequence to the terminal.
     try std.testing.expectEqualStrings("", store.dupeDisplay("ñandú", 1));
     try std.testing.expectEqualStrings("ñ", store.dupeDisplay("ñandú", 2));
     try std.testing.expectEqualStrings("ña", store.dupeDisplay("ñandú", 3));
@@ -171,9 +162,7 @@ test "property: a display name is always bounded and stays valid" {
         const limit = random.intRangeAtMost(usize, 0, buffer.len);
         const shown = store.dupeDisplay(buffer[0..length], limit);
         try std.testing.expect(shown.len <= limit);
-        // Control bytes never reach the terminal...
         for (shown) |byte| try std.testing.expect(byte >= 0x20 and byte != 0x7f);
-        // ...and a well-formed name stays well formed when it is cut.
         if (std.unicode.utf8ValidateSlice(buffer[0..length])) {
             try std.testing.expect(std.unicode.utf8ValidateSlice(shown));
         }
@@ -185,9 +174,6 @@ test "the store is at least as large as the largest prompt it can be handed" {
     const path = @import("path.zig");
     const git = @import("git.zig");
 
-    // A user name, a path label, and either source of a branch name — the
-    // porcelain header and `.git/HEAD` are bounded by the same constant, but a
-    // render can hold both while the status is being merged in.
     const worst_case = prompt.max_user_bytes + path.max_display_bytes + 2 * git.max_head_bytes;
     try std.testing.expect(worst_case <= Store.capacity);
 }

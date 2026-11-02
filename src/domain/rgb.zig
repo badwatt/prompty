@@ -66,7 +66,6 @@ test "parse rejects malformed colours" {
     try std.testing.expectEqual(@as(?Rgb, null), Rgb.parse("#"));
     try std.testing.expectEqual(@as(?Rgb, null), Rgb.parse("#1e1e2"));
     try std.testing.expectEqual(@as(?Rgb, null), Rgb.parse("#1e1e2e0"));
-    // A non-hex digit anywhere makes the whole value unusable.
     try std.testing.expectEqual(@as(?Rgb, null), Rgb.parse("#1e1e2g"));
     try std.testing.expectEqual(@as(?Rgb, null), Rgb.parse("#z11e2e"));
     try std.testing.expectEqual(@as(?Rgb, null), Rgb.parse("#1e1e2!"));

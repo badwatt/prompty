@@ -16,6 +16,18 @@
 5. Run `zig build coverage` → 100.00%.
 6. Commit.
 
+## Comments
+
+- **Plain comments are forbidden.** No `//`, no `////` banners, no trailing
+  `// ...` at the end of a line. Not for explanation, not for rationale, not for
+  "this is subtle".
+- Documentation in the code is `//!` (module) and `///` (declaration) only, and
+  it says what a thing is for its caller, not how it is written.
+- Reasoning, measurements and trade-offs belong in `DESIGN.md`; the README says
+  what a user sees. If code needs a paragraph to be understood, rename it and
+  put the paragraph in `DESIGN.md`.
+- Enforced: `zig build comments` fails on a plain comment.
+
 ## Technical Constraints
 
 - Zig 0.17.0+

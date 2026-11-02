@@ -69,7 +69,6 @@ const bold_off = "\x1b[22m";
 /// The branch glyph from the terminal setup prompty was built for.
 const branch_glyph = "\u{f113}";
 
-// Symbol for each status category, one glyph each and no counts.
 const conflicted_glyph = "=";
 const stashed_glyph = "$";
 const deleted_glyph = "\u{2718}";
@@ -100,20 +99,12 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
     var canvas = Canvas.init(buffer, model.shell, model.color);
     canvas.text("\n");
 
-    // The pill is a chain of surfaces. A separator is inked with the colour of
-    // the surface it leaves and filled with the colour of the one it enters;
-    // that is what makes the glyph read as an arrow. Painting it with the text
-    // colour instead leaves a bright wedge, and painting it with the same
-    // colour on both sides leaves nothing at all.
     var surface: Rgb = model.theme.path_surface;
     if (model.user) |user| {
         surface = if (model.is_root) model.theme.red else model.theme.user_surface;
         paint(&canvas, surface, null);
         canvas.text(powerline.cap_left);
         paint(&canvas, model.theme.text, surface);
-        // The name is the one place the prompt raises its voice. Boldness is
-        // turned off with SGR 22 rather than a full reset, so the segment
-        // colours survive for the separator that follows.
         canvas.escape(bold_on);
         canvas.text(" ");
         canvas.text(user);
@@ -174,10 +165,6 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
         extras.text(clock_mod.format(&digits, now));
     }
     if (model.exit_code) |code| {
-        // One glyph, no number: an interrupted command (128 + SIGINT) and a
-        // command that exited with 1 are the same thing to a prompt, and the
-        // code is one `$?` away in the shell. It sits last, next to the
-        // chevron, because it is about the command that just ran.
         if (code != 0) {
             extras.begin(model.theme.red);
             extras.text(failure_glyph);
@@ -190,9 +177,6 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
     reset(&canvas);
 
     if (model.duration_placement == .right) {
-        // The right segment is a second string, not padding: zsh draws it
-        // against the right edge with `RPROMPT` and leaves the cursor after the
-        // chevron, so the prompt never has to know how wide the terminal is.
         const line_length = canvas.len;
         if (model.duration_ms) |milliseconds| {
             var digits: [duration_mod.max_length]u8 = undefined;
@@ -227,7 +211,6 @@ fn writeStatus(canvas: *Canvas, status: git_status_mod.Status) void {
     if (status.modified > 0) canvas.text(modified_glyph);
     if (status.staged > 0) canvas.text(staged_glyph);
     if (status.untracked > 0) canvas.text(untracked_glyph);
-    // Divergence is one symbol, never two.
     if (status.isDiverged()) {
         canvas.text(diverged_glyph);
     } else if (status.ahead > 0) {
@@ -377,8 +360,6 @@ test "every separator leaves one surface and enters the next" {
     try expectSeparator(rendered, theme.user_surface, theme.path_surface);
     try expectSeparator(rendered, theme.path_surface, theme.git_surface);
 
-    // The pill closes onto the terminal background, so the fill is cleared
-    // first and only the ink is painted.
     var closing_buffer: [48]u8 = undefined;
     const closing = std.fmt.bufPrint(&closing_buffer, "\x1b[0m\x1b[38;2;{d};{d};{d}m{s}", .{
         theme.git_surface.r,
@@ -388,11 +369,8 @@ test "every separator leaves one surface and enters the next" {
     }) catch unreachable;
     try std.testing.expect(std.mem.indexOf(u8, rendered, closing) != null);
 
-    // Three separators for three segments, never one more.
     try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, rendered, powerline.separator));
 
-    // And the text colour is never used as a separator's ink: that is the bug
-    // that made the arrow look like a white wedge.
     var wrong_buffer: [32]u8 = undefined;
     const wedge = std.fmt.bufPrint(&wrong_buffer, "\x1b[38;2;{d};{d};{d}m{s}", .{
         theme.text.r,
@@ -416,12 +394,10 @@ test "the user name is bold and the boldness ends before the separator" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, bold_on ++ " dev ") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, " " ++ bold_off) != null);
 
-    // Reset before the chevron, so the rest of the prompt keeps normal weight.
     const bold_off_position = std.mem.indexOf(u8, rendered, bold_off).?;
     const first_separator = std.mem.indexOf(u8, rendered, powerline.separator).?;
     try std.testing.expect(bold_off_position < first_separator);
 
-    // Nothing else is bold except the chevron.
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, rendered, bold_on));
 }
 
@@ -440,7 +416,6 @@ test "without a user segment the cap starts the path segment" {
     try std.testing.expect(std.mem.startsWith(u8, rendered[1..], cap));
     try std.testing.expectEqual(@as(u8, '\n'), rendered[0]);
 
-    // One surface means one separator, the one that closes the pill.
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, powerline.separator));
 }
 
@@ -469,8 +444,6 @@ test "direnv and a failed command are both marked" {
     const rendered = renderToString(&model);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{f0d6e}") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{00d7}") != null);
-    // The exit code itself is not printed: it would only distinguish failures
-    // from each other, not add anything the prompt can act on.
     try std.testing.expect(std.mem.indexOf(u8, rendered, "130") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "dev merge") != null);
 }
@@ -491,7 +464,6 @@ test "the branch carries its glyph and the status carries its symbols" {
             },
         },
     };
-    // One glyph per category, densely packed after the branch.
     try std.testing.expectEqualStrings(
         "\n\u{e0b6} ~/repo \u{e0b0} \u{f113} main \u{2718}!+? \u{e0b0} \u{276f} ",
         renderToString(&dirty),
@@ -513,7 +485,6 @@ test "the branch carries its glyph and the status carries its symbols" {
     };
     try std.testing.expect(std.mem.indexOf(u8, renderToString(&behind), " \u{21e3} ") != null);
 
-    // Diverged is a single symbol, never both arrows.
     const diverged = Model{
         .theme = fixtureTheme(),
         .color = false,
@@ -589,7 +560,6 @@ test "zsh output wraps every escape and quotes percent signs" {
     };
     const rendered = renderToString(&model);
 
-    // Every ESC must be inside a %{ ... %} pair.
     var index: usize = 0;
     while (std.mem.indexOfPos(u8, rendered, index, "\x1b")) |position| {
         try std.testing.expect(position >= 2);
@@ -617,9 +587,6 @@ test "bash output wraps every escape and quotes backslashes" {
 }
 
 test "the buffer bound is never exceeded by a maximal prompt" {
-    // Every field at the largest size the rest of the program can hand over: a
-    // path clipped to its budget, a branch at its limit, every marker on, and
-    // zsh's escape wrappers around each sequence.
     var path_buffer: [path_mod.max_display_bytes]u8 = @splat('a');
     var branch_buffer: [git_mod.max_head_bytes]u8 = @splat('b');
     const user_buffer: [max_user_bytes]u8 = @splat('u');
@@ -653,8 +620,6 @@ test "the buffer bound is never exceeded by a maximal prompt" {
 
     const rendered = renderToString(&model);
     try std.testing.expect(rendered.len < plain_buffer_size);
-    // zsh needs every escape wrapped, and a single missing pair corrupts line
-    // editing, so the count must match exactly.
     try std.testing.expectEqual(
         std.mem.count(u8, rendered, "%{"),
         std.mem.count(u8, rendered, "%}"),
@@ -673,14 +638,11 @@ test "the right-aligned duration travels after a separator, not as padding" {
     };
     const rendered = renderToString(&model);
 
-    // The line itself is exactly what the inline placement produces, with the
-    // separator and the number after it: no padding, and no width involved.
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
     const left = rendered[0..std.mem.indexOfScalar(u8, rendered, split).?];
     try std.testing.expect(std.mem.endsWith(u8, left, "\u{276f} "));
     try std.testing.expectEqualStrings("1234ms", rendered[left.len + 1 ..]);
 
-    // Bold yellow, and only for the number.
     const colored = Model{
         .theme = theme,
         .path = "~/p",
@@ -699,8 +661,6 @@ test "the right-aligned duration travels after a separator, not as padding" {
 }
 
 test "without a duration the right segment is empty, never missing" {
-    // The shell splits on the separator unconditionally: it has to be there
-    // even when there is nothing to put on the right.
     const model = Model{
         .theme = fixtureTheme(),
         .color = false,
@@ -712,8 +672,6 @@ test "without a duration the right segment is empty, never missing" {
 }
 
 test "a name cannot forge the separator" {
-    // The separator is a control byte, and every name the prompt shows has its
-    // control bytes replaced before it gets here.
     const model = Model{
         .theme = fixtureTheme(),
         .color = false,
@@ -735,8 +693,6 @@ test "the inline placement never pads and the right one never doubles" {
     };
     try std.testing.expect(std.mem.endsWith(u8, renderToString(&dimmed), "\u{276f} "));
 
-    // A right-placed duration replaces the dimmed one instead of repeating it:
-    // the human form is not in the output at all.
     const right = Model{
         .theme = theme,
         .color = false,

@@ -48,14 +48,10 @@ test "converts UTC timestamps" {
 }
 
 test "applies positive and negative offsets across day boundaries" {
-    // 2024-01-01T00:30:00Z in Madrid (UTC+1) is 01:30, and in New York
-    // (UTC-5) it is still the previous day at 19:30.
     try expectTime(.{ .hour = 1, .minute = 30 }, 1_704_069_000, 3_600);
     try expectTime(.{ .hour = 19, .minute = 30 }, 1_704_069_000, -18_000);
-    // Half-hour zones exist.
     try expectTime(.{ .hour = 6, .minute = 0 }, 0, 21_600);
     try expectTime(.{ .hour = 5, .minute = 30 }, 0, 19_800);
-    // Negative timestamps clamp to the epoch instead of wrapping.
     try expectTime(.{ .hour = 0, .minute = 0 }, -100, 0);
     try expectTime(.{ .hour = 0, .minute = 0 }, -100, -3_600);
 }

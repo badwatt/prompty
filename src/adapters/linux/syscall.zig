@@ -14,8 +14,6 @@ const posix = std.posix;
 pub fn progress(result: usize) ?usize {
     switch (linux.errno(result)) {
         .SUCCESS => return if (result == 0) null else result,
-        // A window resize can arrive in the middle of the prompt. Retrying is
-        // what keeps the line whole instead of printing half of it.
         .INTR => return 0,
         else => return null,
     }

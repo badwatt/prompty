@@ -77,6 +77,5 @@ test "the right-edge form is the number in milliseconds" {
     try std.testing.expectEqualStrings("0ms", millis(&buffer, 0));
     try std.testing.expectEqualStrings("1234ms", millis(&buffer, 1_234));
     try std.testing.expectEqualStrings("86400000ms", millis(&buffer, 86_400_000));
-    // Even the largest value a u64 can hold fits the buffer the prompt uses.
     try std.testing.expect(std.mem.endsWith(u8, millis(&buffer, std.math.maxInt(u64)), "ms"));
 }

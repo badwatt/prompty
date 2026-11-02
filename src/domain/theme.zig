@@ -158,13 +158,10 @@ fn expectClose(expected: u8, actual: u8, tolerance: u8) !void {
 test "derive keeps a dark theme readable" {
     const theme = Theme.derive(Theme.default_background);
 
-    // Text must be light on a dark background, and dimmed text must sit
-    // between the text colour and the background.
     try std.testing.expect(theme.text.r > 0xb0);
     try std.testing.expect(theme.muted.r > theme.background.r);
     try std.testing.expect(theme.muted.r < theme.text.r);
 
-    // Surfaces fade towards the background from left to right.
     try std.testing.expect(theme.user_surface.r > theme.background.r);
     try std.testing.expect(theme.user_surface.r > theme.path_surface.r);
     try std.testing.expect(theme.path_surface.r > theme.git_surface.r);
@@ -193,13 +190,10 @@ test "derive is deterministic and keeps the background untouched" {
 }
 
 test "the transfer function handles the near-black end of the range" {
-    // Below the linear cut-off the encoding is a plain multiplication.
     try std.testing.expectEqual(@as(u8, 0), delinearize(0.0));
     try std.testing.expectEqual(@as(u8, 9), delinearize(0.003));
-    // The rounding of the transfer function loses one step at the top end.
     try std.testing.expect(delinearize(1.0) >= 254);
     try std.testing.expect(delinearize(1.0) <= 255);
-    // Out-of-range values are clamped rather than wrapped.
     try std.testing.expectEqual(@as(u8, 0), delinearize(-0.5));
     try std.testing.expect(delinearize(2.0) >= 254);
 }

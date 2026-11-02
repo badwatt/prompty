@@ -49,8 +49,6 @@ pub fn display(out: []u8, input: Input) []const u8 {
     if (cwd.len == 0) return "/";
     if (std.mem.eql(u8, cwd, "/")) return "/";
 
-    // Inside a repository the name of the repository is the anchor, and
-    // everything above it is dropped, which is what the symbol announces.
     if (input.repository_root) |root| {
         if (below(cwd, trimTrailingSlashes(root))) |remainder| {
             const name = baseName(trimTrailingSlashes(root));
@@ -98,8 +96,6 @@ const Parts = struct {
 };
 
 fn assemble(out: []u8, parts: Parts) []const u8 {
-    // Keep a rolling window of the last `keep` components: a path may be
-    // arbitrarily deep but the prompt only ever shows a bounded tail.
     var tail: [max_keep][]const u8 = undefined;
     var tail_length: usize = 0;
     var total: usize = 0;
@@ -109,7 +105,6 @@ fn assemble(out: []u8, parts: Parts) []const u8 {
         total += 1;
     }
 
-    // Tokenising skips repeated separators, which are legal in a path.
     var components = std.mem.tokenizeScalar(u8, parts.rest, '/');
     while (components.next()) |component| {
         push(&tail, &tail_length, parts.keep, component);
@@ -129,10 +124,6 @@ fn assemble(out: []u8, parts: Parts) []const u8 {
     for (tail[0..tail_length], 0..) |component, position| {
         if (position > 0) written = clip(out, written, "/");
         if (written + component.len > out.len) {
-            // The name does not fit. Take the room for the marker back instead
-            // of assuming the separator left it: a component can end flush with
-            // the end of the buffer, and then the marker has to replace its
-            // tail.
             written = clip(out, cutBackForMarker(out, written), ellipsis);
             break;
         }
@@ -244,7 +235,6 @@ test "home itself collapses to a tilde" {
 test "paths under home keep the tilde until it stops fitting" {
     try expectDisplay("~/src", .{ .cwd = "/home/dev/src", .home = "/home/dev" });
     try expectDisplay("~/a/b", .{ .cwd = "/home/dev/a/b", .home = "/home/dev" });
-    // Three levels below home no longer fit in three slots: `~` takes one.
     try expectDisplay("…/a/b/c", .{ .cwd = "/home/dev/a/b/c", .home = "/home/dev" });
     try expectDisplay("…/b/c/d", .{ .cwd = "/home/dev/a/b/c/d", .home = "/home/dev" });
     try expectDisplay("…/a", .{ .cwd = "/home/dev/a", .home = "/home/dev", .keep = 1 });
@@ -265,7 +255,6 @@ test "paths that merely look like home are not shortened" {
 }
 
 test "inside a repository the label is anchored on the repository name" {
-    // The ancestors of the repository are hidden, so the symbol always shows.
     try expectDisplay("…/prompty", .{
         .cwd = "/home/dev/Projects/code/prompty",
         .home = "/home/dev",
@@ -281,7 +270,6 @@ test "inside a repository the label is anchored on the repository name" {
         .home = "/home/dev",
         .repository_root = "/home/dev/Projects/code/prompty",
     });
-    // Deeper than the window: the oldest components go, the symbol stays.
     try expectDisplay("…/domain/and/deeper", .{
         .cwd = "/home/dev/Projects/code/prompty/src/domain/and/deeper",
         .home = "/home/dev",
@@ -303,7 +291,6 @@ test "a repository root that is not an ancestor is ignored" {
         .home = "/home/dev",
         .repository_root = "/srv/build/prompty",
     });
-    // A repository at the filesystem root has no name to anchor on.
     try expectDisplay("/tmp", .{
         .cwd = "/tmp",
         .home = "/home/dev",
@@ -344,7 +331,6 @@ test "repeated separators are not components" {
 test "the anchor name is the last component of the repository root" {
     try std.testing.expectEqualStrings("prompty", baseName("/home/dev/prompty"));
     try std.testing.expectEqualStrings("x", baseName("/x"));
-    // A root without a separator still has a name.
     try std.testing.expectEqualStrings("prompty", baseName("prompty"));
 }
 
@@ -372,7 +358,6 @@ test "a name longer than the whole budget is cut, not overflowed" {
 }
 
 test "cutting never splits a multi-byte character" {
-    // Multi-byte names that straddle the boundary, at every offset.
     const pieces = "ñ日本語🚀";
     var cwd: [2048]u8 = undefined;
     var length: usize = 0;
@@ -395,9 +380,6 @@ test "three long components are all bounded" {
 }
 
 test "a component that ends flush with the buffer still leaves room for the mark" {
-    // The first name fills the budget exactly, so the second one has nowhere to
-    // go and the marker has to take its place. Assuming there was room for it
-    // ran the copy past the end of the buffer.
     var cwd: [max_display_bytes + 8]u8 = undefined;
     cwd[0] = '/';
     @memset(cwd[1..max_display_bytes], 'a');
@@ -414,8 +396,6 @@ test "a component that ends flush with the buffer still leaves room for the mark
 test "the room for the mark is taken back to a character boundary" {
     var out: [max_display_bytes]u8 = undefined;
     @memset(&out, 'a');
-    // A two-byte character straddling the limit: its continuation byte sits
-    // where the marker would start, so the cut has to step back one more byte.
     const limit = out.len - ellipsis.len;
     out[limit - 1] = 0xc3;
     out[limit] = 0xb1;
@@ -442,8 +422,6 @@ fn randomSlice(random: std.Random, buffer: []u8, alphabet: []const u8) []const u
 }
 
 test "property: any bytes produce a bounded, non-empty label" {
-    // The path comes from the environment, so the property is about *any* byte
-    // sequence: the label must stay inside its budget and never be empty.
     var prng = std.Random.DefaultPrng.init(0x5eed);
     const random = prng.random();
     var cwd_buffer: [1024]u8 = undefined;
@@ -468,8 +446,6 @@ test "property: any bytes produce a bounded, non-empty label" {
 }
 
 test "property: valid UTF-8 in, valid UTF-8 out" {
-    // Component names are bytes the filesystem accepts; when they are well
-    // formed the label has to be as well, however it gets cut.
     var prng = std.Random.DefaultPrng.init(0xc0ffee);
     const random = prng.random();
     const pieces = [_][]const u8{ "a", "ñ", "日", "🚀", "Z", "9", ".", "-" };
@@ -496,7 +472,6 @@ test "join adds one separator and refuses what does not fit" {
     try std.testing.expectEqualStrings("a/b", join(&buffer, "a", "b").?);
     try std.testing.expectEqualStrings("a/b", join(&buffer, "a/", "b").?);
     try std.testing.expectEqualStrings("/b", join(&buffer, "/", "b").?);
-    // An empty directory is the current directory: no separator, just the name.
     try std.testing.expectEqualStrings("b", join(&buffer, "", "b").?);
     var small: [4]u8 = undefined;
     try std.testing.expectEqual(@as(?[]u8, null), join(&small, "abc", "de"));

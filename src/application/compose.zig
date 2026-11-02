@@ -43,8 +43,6 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
         .color = options.color and colorAllowed(host),
         .path = "/",
     };
-    // Over SSH the useful question is "which machine am I on", so the segment
-    // shows the hostname; anywhere else it shows who you are.
     if (remote(host)) {
         if (host.hostname) |name| {
             const short = shortHostname(name);
@@ -61,9 +59,6 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     var working_directory_buffer: [path_mod.max_display_bytes]u8 = undefined;
     const working_directory = workingDirectory(host, &working_directory_buffer);
 
-    // The repository is looked up before the path is formatted: inside one, the
-    // label is anchored on its name rather than on home. Both the root and the
-    // git directory borrow this buffer, so it lives here, in the caller.
     var git_dir_buffer: [path_mod.scratch_bytes]u8 = undefined;
     const found_repository = repository.probe(host, working_directory, store, &git_dir_buffer);
     if (found_repository) |found| {
@@ -88,8 +83,6 @@ pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt
     const unix_seconds = host.clock.now();
     model.time = clock_mod.fromUnix(unix_seconds, host.clock.offsetAt(unix_seconds));
     model.duration_ms = parseDuration(host);
-    // A right edge to put it on exists in one shell: zsh's `RPROMPT`. Anywhere
-    // else the same number goes inline, which is what those shells can draw.
     if (options.duration and options.shell == .zsh) model.duration_placement = .right;
     model.exit_code = parseExitCode(host);
     model.direnv = direnvActive(host);
@@ -272,11 +265,6 @@ fn direnvActive(host: ports.Host) bool {
     return diff.len > 0;
 }
 
-// ---------------------------------------------------------------------------
-// Integration tests: the whole use case, driven through the ports with a fake
-// filesystem, clock, terminal and environment.
-// ---------------------------------------------------------------------------
-
 const fakes = @import("../test_support/fakes.zig");
 
 const project_directories = [_][]const u8{"/home/dev/proj"};
@@ -326,17 +314,12 @@ test "collects every fact from a fake project" {
 
     try std.testing.expectEqualStrings("dev", model.user.?);
     try std.testing.expect(!model.is_root);
-    // Inside a repository the label is anchored on the repository name, so the
-    // home prefix is replaced by the truncation symbol.
     try std.testing.expectEqualStrings("…/proj", model.path);
     try std.testing.expectEqualStrings("main", model.git.?.branch);
     try std.testing.expectEqual(git_mod.Operation.none, model.git.?.operation);
 }
 
 test "the right edge is zsh's, so only zsh gets it" {
-    // RPROMPT is the only mechanism that keeps the cursor after the chevron
-    // while putting the number at the edge. bash and the plain output have
-    // none, so the same option leaves the duration where they can draw it.
     const environment = default_environment ++ [_][2][]const u8{
         .{ "PROMTY_LAST_DURATION_MS", "1234" },
     };
@@ -365,23 +348,18 @@ test "over ssh the segment says which machine you are on" {
     var harness = FakeHarness.init(&ssh);
     harness.host.hostname = "build-01.example.com";
     const model = harness.model(.{});
-    // The first label: it is what tells machines apart.
     try std.testing.expectEqualStrings("build-01", model.user.?);
 
-    // A local shell still says who you are.
     var local = FakeHarness.init(&default_environment);
     local.host.hostname = "build-01.example.com";
     try std.testing.expectEqualStrings("dev", local.model(.{}).user.?);
 
-    // The other two spellings of "there is a server on the other end".
     for ([_][]const u8{ "SSH_CLIENT", "SSH_TTY" }) |name| {
         var harness_with = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ name, "x" }}));
         harness_with.host.hostname = "pi";
         try std.testing.expectEqualStrings("pi", harness_with.model(.{}).user.?);
     }
 
-    // An empty variable is not a session, and a machine with no name falls back
-    // to the user name rather than showing an empty segment.
     var empty = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
         .{ "SSH_CONNECTION", "" },
     }));
@@ -391,7 +369,6 @@ test "over ssh the segment says which machine you are on" {
     var unnamed = FakeHarness.init(&ssh);
     try std.testing.expectEqualStrings("dev", unnamed.model(.{}).user.?);
 
-    // root over ssh is still root: the colour is about privileges.
     var as_root = FakeHarness.init(&ssh);
     as_root.host.hostname = "build-01.example.com";
     as_root.host.user_id = 0;
@@ -401,9 +378,6 @@ test "over ssh the segment says which machine you are on" {
 }
 
 test "an absurdly long user name cannot take over the line" {
-    // `$USER` is whatever the parent process left there. The store and the
-    // canvas now stop at their bounds, but a name that long would still push
-    // the path, the branch and the clock off the line.
     const long_name: [1000]u8 = @splat('u');
     var harness = FakeHarness.init(&.{
         .{ "USER", &long_name },
@@ -428,7 +402,6 @@ test "a root shell is marked and can be rendered" {
 
 test "the working directory falls back to getcwd and then to root" {
     {
-        // A relative PWD is not trustworthy, so the filesystem is asked.
         var harness = FakeHarness.init(&.{.{ "HOME", "/home/dev" }});
         harness.host.files.directories = &.{};
         try std.testing.expectEqualStrings("/", harness.model(.{}).path);
@@ -489,8 +462,6 @@ test "a relative gitfile resolves against its own directory" {
         .{ "PWD", "/home/dev/sub" },
     } };
 
-    // The fake filesystem does not normalise paths, so the literal join is what
-    // must be requested.
     const model = harness.model(.{});
     try std.testing.expectEqualStrings("sub", model.git.?.branch);
 }
@@ -534,7 +505,6 @@ test "duration and exit status are read from the shell's environment" {
         try std.testing.expectEqual(@as(?u8, 130), model.exit_code);
     }
     {
-        // Zero, junk and absurd durations are all ignored.
         var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_LAST_DURATION_MS", "0" },
             .{ "PROMTY_LAST_EXIT", "not-a-code" },
@@ -557,7 +527,6 @@ test "direnv is visible without running it" {
     }));
     try std.testing.expect(harness.model(.{}).direnv);
 
-    // An empty diff means direnv did nothing here.
     var idle = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
         .{ "DIRENV_DIFF", "" },
     }));
@@ -574,7 +543,6 @@ test "colour is disabled by NO_COLOR and by a dumb terminal" {
     var colourful = FakeHarness.init(&(default_environment ++ [_][2][]const u8{.{ "TERM", "xterm-256color" }}));
     try std.testing.expect(colourful.model(.{}).color);
 
-    // The caller can also turn colour off explicitly.
     try std.testing.expect(!colourful.model(.{ .color = false }).color);
 }
 
@@ -589,7 +557,6 @@ test "the background comes from an override, then the cache, then the default" {
         try std.testing.expectEqual(light_background, background(harness.host.host()));
     }
     {
-        // An override that is not a colour is ignored, not fatal.
         var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_BACKGROUND", "bright-green" },
         }));
@@ -606,7 +573,6 @@ test "the background comes from an override, then the cache, then the default" {
         try std.testing.expectEqual(light_background, cachedBackground(harness.host.host()).?);
     }
     {
-        // A cache file with junk in it falls back to the default.
         var harness = FakeHarness.init(&default_environment);
         harness.host.files.sources = &.{
             .{ .path = "/home/dev/.cache/prompty/theme", .contents = "not a colour" },
@@ -614,7 +580,6 @@ test "the background comes from an override, then the cache, then the default" {
         try std.testing.expectEqual(default_theme_background, background(harness.host.host()));
     }
     {
-        // No HOME and no XDG_CACHE_HOME: nothing to read.
         var harness = FakeHarness.init(&.{});
         try std.testing.expectEqual(default_theme_background, background(harness.host.host()));
         try std.testing.expectEqual(@as(?theme_mod.Rgb, null), cachedBackground(harness.host.host()));
@@ -696,8 +661,6 @@ test "a detached repository keeps the short commit from the porcelain" {
 }
 
 test "the status cost can be capped without losing the branch" {
-    // `fast` asks git for less: no untracked walk, no commit-graph walk. The
-    // branch still comes back in the same porcelain header.
     var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
         .{ "PROMTY_GIT", "fast" },
     }));
@@ -726,7 +689,6 @@ test "status can be switched off by the caller or the environment" {
         const model = harness.model(.{ .git = false });
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
         try std.testing.expect(model.git.?.status.isClean());
-        // The branch still comes from the files.
         try std.testing.expectEqualStrings("main", model.git.?.branch);
     }
     {
@@ -745,7 +707,6 @@ test "status can be switched off by the caller or the environment" {
         try std.testing.expectEqual(@as(usize, 0), harness.host.commands.calls);
     }
     {
-        // Anything else leaves it on.
         var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
             .{ "PROMTY_GIT", "1" },
         }));

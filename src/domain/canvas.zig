@@ -169,7 +169,6 @@ test "text past the end of the buffer is dropped, not written" {
     canvas.text("abcdefgh");
     canvas.text("ijkl");
     try std.testing.expectEqualStrings("abcdefgh", canvas.bytes());
-    // And the same bound holds when every character has to be quoted.
     var quoted = Canvas.init(&buffer, .zsh, true);
     quoted.text("%%%%%%");
     try std.testing.expectEqualStrings("%%%%%%%%", quoted.bytes());
@@ -178,7 +177,7 @@ test "text past the end of the buffer is dropped, not written" {
 test "a cut at the end of the buffer does not split a character" {
     var buffer: [2]u8 = undefined;
     var canvas = Canvas.init(&buffer, .plain, true);
-    canvas.text("a\u{00f1}"); // 'a' then a two-byte character
+    canvas.text("a\u{00f1}");
     try std.testing.expectEqualStrings("a", canvas.bytes());
     try std.testing.expect(std.unicode.utf8ValidateSlice(canvas.bytes()));
 }

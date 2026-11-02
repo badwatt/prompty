@@ -21,7 +21,6 @@ pub fn main(minimal: std.process.Init.Minimal) u8 {
 }
 
 pub fn entry(minimal: std.process.Init.Minimal) u8 {
-    // Statically allocated, never moved: see `domain/store.zig`.
     var store: store_mod.Store = undefined;
     store.reset();
 
@@ -34,8 +33,6 @@ pub fn entry(minimal: std.process.Init.Minimal) u8 {
 
     var runner = command_adapter.Runner{ .block = minimal.environ.block.slice };
 
-    // `$HOSTNAME` is a shell variable, not an exported one: zsh does not put it
-    // in the environment, so the kernel is asked instead.
     var uts: linux.utsname = undefined;
     const hostname: ?[]const u8 = if (linux.errno(linux.uname(&uts)) == .SUCCESS)
         std.mem.sliceTo(uts.nodename[0..], 0)
@@ -124,6 +121,5 @@ test "entry survives an empty environment and no arguments" {
         .args = .{ .vector = &argv },
         .environ = .{ .block = .{ .slice = &environment } },
     };
-    // No command means help, which must not depend on HOME or PWD.
     try std.testing.expectEqual(@as(u8, 0), entry(minimal));
 }

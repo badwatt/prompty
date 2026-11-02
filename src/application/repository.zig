@@ -47,8 +47,6 @@ pub fn probe(
     var directory = working_directory;
     var walked: u8 = 0;
     while (true) {
-        // Every iteration either finds a repository or walks one level up, so
-        // the assertion is the loop's bound.
         std.debug.assert(walked < max_git_walk);
         walked += 1;
         if (locate(host, directory, git_dir_buffer, &head_buffer)) |located| {
@@ -86,8 +84,6 @@ fn probeRepository(
     var directory = working_directory;
     var walked: u8 = 0;
     while (true) {
-        // Every iteration either finds a repository or walks one level up, so
-        // the assertion is the loop's bound.
         std.debug.assert(walked < max_git_walk);
         walked += 1;
         if (locate(host, directory, git_dir_buffer, &head_buffer)) |located| {
@@ -114,7 +110,6 @@ fn locate(
 ) ?Located {
     var scratch: [path_mod.scratch_bytes]u8 = undefined;
 
-    // The common case: a real `.git` directory with a HEAD inside.
     if (join(&scratch, directory, ".git/HEAD")) |head_path| {
         if (host.files.read(head_path, head_buffer)) |contents| {
             const head = git_mod.parseHead(contents) orelse return null;
@@ -124,7 +119,6 @@ fn locate(
         }
     }
 
-    // A worktree or submodule: `.git` is a file pointing at the real directory.
     const pointer_path = join(&scratch, directory, ".git") orelse return null;
     const pointer = host.files.read(pointer_path, head_buffer) orelse return null;
     const target = git_mod.parseGitFile(pointer) orelse return null;

@@ -62,7 +62,6 @@ pub fn parse(records: []const u8) ?Report {
 
     while (fields.next()) |record| {
         if (record.len == 0) continue;
-        // A rename record is followed by the original path as its own field.
         if (skip_path) {
             skip_path = false;
             continue;
@@ -73,8 +72,6 @@ pub fn parse(records: []const u8) ?Report {
             '#' => parseHeader(&report, record),
             '1' => _ = parseChanged(&report.status, record),
             '2' => {
-                // The original path follows as its own field, but only when the
-                // record itself was well formed.
                 if (parseChanged(&report.status, record)) {
                     report.status.renamed +|= 1;
                     skip_path = true;
@@ -82,7 +79,6 @@ pub fn parse(records: []const u8) ?Report {
             },
             'u' => report.status.conflicted +|= 1,
             '?' => report.status.untracked +|= 1,
-            // '!' marks ignored files, which no prompt shows.
             else => {},
         }
     }
@@ -103,7 +99,6 @@ fn parseHeader(report: *Report, record: []const u8) void {
     }
     if (std.mem.startsWith(u8, record, "# branch.oid ")) {
         const commit = record["# branch.oid ".len..];
-        // "(initial)" means the repository has no commit yet.
         if (commit.len >= 7 and !std.mem.eql(u8, commit, "(initial)")) report.commit = commit;
         return;
     }
@@ -121,16 +116,12 @@ fn parseChanged(status: *Status, record: []const u8) bool {
     const index = record[2];
     const worktree = record[3];
 
-    // A deletion is reported once, as a deletion, no matter which side of the
-    // index records it: deleting a file is not "modifying" it.
     if (index == 'D' or worktree == 'D') {
         status.deleted +|= 1;
         return true;
     }
     if (index != '.' and index != ' ') status.staged +|= 1;
     if (worktree != '.' and worktree != ' ') status.modified +|= 1;
-    // Renames are counted from the record type, not from `X`, so that a
-    // renamed entry is never counted twice.
     return true;
 }
 
@@ -160,8 +151,6 @@ test "a clean repository reports a branch and nothing else" {
 }
 
 test "every kind of change is counted once" {
-    // One modified, one staged, one deleted, one renamed (plus its original
-    // path), one conflicted and two untracked.
     const records =
         "# branch.head main\x00" ++
         "1 .M N... 100644 100644 100644 aaaaaaa aaaaaaa src/modified.zig\x00" ++
@@ -174,7 +163,6 @@ test "every kind of change is counted once" {
     const status = parse(records).?.status;
 
     try std.testing.expectEqual(@as(u16, 1), status.modified);
-    // The staged rename counts as staged as well as renamed.
     try std.testing.expectEqual(@as(u16, 2), status.staged);
     try std.testing.expectEqual(@as(u16, 1), status.deleted);
     try std.testing.expectEqual(@as(u16, 1), status.renamed);
@@ -245,13 +233,9 @@ test "an over-long branch name is rejected rather than truncated" {
 }
 
 test "a truncated changed record is ignored rather than read past" {
-    // The records come from another program. A record too short to carry its
-    // XY field is not a change, and indexing it anyway read whatever followed
-    // in the read buffer.
     const report = parse("1\x00# branch.head main\x00").?;
     try std.testing.expect(report.status.isClean());
     try std.testing.expectEqualStrings("main", report.branch.?);
-    // The same for a rename, which reads the field and then counts itself.
     try std.testing.expect(parse("2\x00").?.status.isClean());
     try std.testing.expect(parse("1 M\x00").?.status.isClean());
 }
@@ -259,8 +243,6 @@ test "a truncated changed record is ignored rather than read past" {
 test "garbage and empty input are rejected" {
     try std.testing.expectEqual(@as(?Report, null), parse(""));
     try std.testing.expectEqual(@as(?Report, null), parse("\x00\x00\x00"));
-    // Unknown record types are ignored, but their presence still counts as a
-    // report: git is free to add record types in the future.
     const report = parse("# branch.head main\x00X unknown\x00").?;
     try std.testing.expectEqualStrings("main", report.branch.?);
 }
@@ -290,8 +272,6 @@ test "counts saturate instead of wrapping" {
 }
 
 test "property: any bytes are parsed, never indexed past" {
-    // The records come from another program. Whatever it prints, the parser
-    // reports something bounded or nothing at all.
     var prng = std.Random.DefaultPrng.init(0xbadc0de);
     const random = prng.random();
     var buffer: [512]u8 = undefined;

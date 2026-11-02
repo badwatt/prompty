@@ -70,7 +70,6 @@ test "TZ without a name means UTC" {
         .files = files.files(),
         .environ = env.environ(),
     };
-    // An empty TZ must not even try to open a file.
     try std.testing.expectEqual(@as(i32, 0), adapter.clock().offsetAt(0));
     try std.testing.expectEqual(@as(usize, 0), files.read_count);
 }
@@ -122,7 +121,6 @@ test "the wall clock is plausible" {
         .files = files.files(),
         .environ = env.environ(),
     };
-    // Well after 2020 and well before 2100: enough to catch a units mistake.
     const now = adapter.clock().now();
     try std.testing.expect(now > 1_577_836_800);
     try std.testing.expect(now < 4_102_444_800);

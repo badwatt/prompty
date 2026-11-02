@@ -39,8 +39,6 @@ pub const Fs = struct {
         std.debug.assert(path.len > 0);
         makeParentDirectories(path);
 
-        // Write a sibling and rename it over the target: two shells starting at
-        // once must never leave a reader looking at half a file.
         var temporary: [4096]u8 = undefined;
         const temporary_path = std.fmt.bufPrint(&temporary, "{s}.tmp", .{path}) catch return false;
         if (!writeDirect(temporary_path, bytes)) return false;
@@ -103,7 +101,6 @@ pub const Fs = struct {
     fn currentDir(_: *anyopaque, buffer: []u8) ?[]const u8 {
         const rc = linux.getcwd(buffer.ptr, buffer.len);
         if (linux.errno(rc) != .SUCCESS) return null;
-        // The kernel returns the length including the trailing NUL.
         if (rc == 0 or rc > buffer.len) return null;
         return buffer[0 .. rc - 1];
     }
@@ -140,7 +137,6 @@ test "the real adapter reads, writes and reports the working directory" {
     try std.testing.expect(!files.exists("src/definitely/missing"));
     try std.testing.expect(files.exists("src/adapters/linux/fs.zig"));
 
-    // Writing creates every missing ancestor.
     var path_buffer: [128]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buffer, ".zig-cache/prompty-adapter-test/nested/theme", .{}) catch unreachable;
     try std.testing.expect(files.write(path, "#123456\n"));
@@ -148,7 +144,6 @@ test "the real adapter reads, writes and reports the working directory" {
     var read_back: [16]u8 = undefined;
     try std.testing.expectEqualStrings("#123456\n", files.read(path, &read_back).?);
 
-    // Clean up the scratch tree so the test is repeatable.
     var zero_terminated: [129]u8 = undefined;
     @memcpy(zero_terminated[0..path.len], path);
     zero_terminated[path.len] = 0;

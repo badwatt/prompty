@@ -46,7 +46,6 @@ pub const Runner = struct {
         std.debug.assert(argv.len > 0);
         std.debug.assert(argv.len <= max_arguments);
 
-        // Prepared before the fork so that the child does nothing but exec.
         var pointers: [max_arguments + 1]?[*:0]const u8 = undefined;
         for (argv, 0..) |argument, index| pointers[index] = argument.ptr;
         pointers[argv.len] = null;
@@ -57,7 +56,6 @@ pub const Runner = struct {
         const read_end = pipe[0];
         const write_end = pipe[1];
 
-        // A failed fork is not a child: it has to stop here.
         const child = childPid(self.fork()) orelse {
             _ = linux.close(read_end);
             _ = linux.close(write_end);
@@ -67,9 +65,6 @@ pub const Runner = struct {
             _ = linux.close(read_end);
             _ = linux.dup2(write_end, posix.STDOUT_FILENO);
             _ = linux.close(write_end);
-            // The parent blocks the fatal signals while it talks to the
-            // terminal, and a child would inherit that mask and become
-            // uninterruptible. Nothing blocked, then become the program.
             var empty = posix.sigemptyset();
             posix.sigprocmask(posix.SIG.SETMASK, &empty, null);
             divert(self, argv[0], arguments);
@@ -79,20 +74,13 @@ pub const Runner = struct {
 
         var filled: usize = 0;
         while (filled < stdout.len) {
-            // The deadline expired, the wait failed, or the writer is gone:
-            // either way there is nothing more to read.
             if (!syscall.ready(read_end, self.timeout_ms)) break;
-            // A read error is indistinguishable from the end of the output for
-            // our purposes: both mean "nothing more to parse".
             const received = posix.read(read_end, stdout[filled..]) catch 0;
             if (received == 0) break;
             filled += received;
         }
         _ = linux.close(read_end);
 
-        // Reap without blocking. A child that is still alive overran the
-        // deadline (or could not finish writing because the buffer was full),
-        // so it is killed and reaped again.
         var wait_status: i32 = 0;
         const first = linux.wait4(child, &wait_status, linux.W.NOHANG, null);
         if (linux.errno(first) != .SUCCESS) return null;
@@ -101,12 +89,11 @@ pub const Runner = struct {
             if (linux.errno(linux.wait4(child, &wait_status, 0, null)) != .SUCCESS) return null;
         }
 
-        // Output that did not fit cannot be parsed, so it is not a result.
         if (filled == stdout.len) return null;
 
         const status: u32 = @bitCast(wait_status);
-        if (status & 0x7f != 0) return null; // killed by a signal
-        if ((status & 0xff00) >> 8 != 0) return null; // non-zero exit
+        if (status & 0x7f != 0) return null;
+        if ((status & 0xff00) >> 8 != 0) return null;
         return stdout[0..filled];
     }
 
@@ -132,9 +119,6 @@ pub const Runner = struct {
         program: []const u8,
         arguments: [*:null]const ?[*:0]const u8,
     ) noreturn {
-        // The child inherits the parent's signal mask, and the parent blocks
-        // signals while it talks to the terminal. A git that inherited that
-        // mask could not be interrupted, so the mask is cleared before exec.
         var empty = posix.sigemptyset();
         posix.sigprocmask(posix.SIG.SETMASK, &empty, null);
 
@@ -212,16 +196,12 @@ fn testRunner(search_path: ?[]const u8) Runner {
 }
 
 test "a failed fork is a failure, never a pid of minus one" {
-    // The failure path is not reachable on demand, so the decision is tested on
-    // the values a failed fork produces.
     try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -1))));
     try std.testing.expectEqual(@as(?linux.pid_t, null), Runner.childPid(@bitCast(@as(isize, -12))));
     try std.testing.expectEqual(@as(?linux.pid_t, 4242), Runner.childPid(4242));
 }
 
 test "a child does not inherit a blocked signal" {
-    // The prompt blocks SIGINT..SIGHUP while it queries the terminal; a command
-    // started in that window must still be interruptible.
     var blocked = posix.sigemptyset();
     posix.sigaddset(&blocked, .USR1);
     var saved: posix.sigset_t = undefined;
@@ -231,20 +211,13 @@ test "a child does not inherit a blocked signal" {
     var runner = testRunner(null);
     var output: [128]u8 = undefined;
     const result = runner.command().run(
-        // Shell builtins only: a test may not depend on where this machine
-        // keeps its coreutils.
         &.{ "/bin/sh", "-c", "while read -r key value; do case $key in SigBlk:) echo \"$value\";; esac; done < /proc/self/status" },
         &output,
     ).?;
-    // "SigBlk:\t0000000000000000" — nothing blocked on entry.
     try std.testing.expect(std.mem.endsWith(u8, std.mem.trimEnd(u8, result, "\n"), "0000000000000000"));
 }
 
 test "a child cannot talk over the prompt or read the keyboard" {
-    // A `.git` that git does not understand makes it print "fatal: ..." on
-    // stderr, and anything on PATH that reads stdin would take the user's
-    // typing. `-ef` compares device and inode, so this asks the child itself
-    // which file its standard input and error are.
     var runner = testRunner(null);
     var output: [64]u8 = undefined;
     const result = runner.command().run(
@@ -262,7 +235,6 @@ test "a failed fork closes the pipe and signals nothing" {
         @as(?[]const u8, null),
         runner.command().run(&.{"/bin/true"}, &output),
     );
-    // Both ends were closed: the descriptor numbers are free again.
     var pipe: [2]posix.fd_t = undefined;
     std.debug.assert(linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) == .SUCCESS);
     _ = linux.close(pipe[0]);
@@ -293,7 +265,6 @@ test "a non-zero exit is a failure" {
 }
 
 test "a command that does not exist is a failure" {
-    // No search path given: the runner falls back to the usual directories.
     var runner = testRunner(null);
     var output: [256]u8 = undefined;
     try std.testing.expectEqual(
@@ -315,8 +286,6 @@ test "a command that never answers is killed" {
     var runner = testRunner(null);
     runner.timeout_ms = 20;
     var output: [256]u8 = undefined;
-    // A shell busy loop: no external program needed, so this behaves the same
-    // in a build sandbox as on a desktop.
     try std.testing.expectEqual(
         @as(?[]const u8, null),
         runner.command().run(&.{ "/bin/sh", "-c", "while :; do :; done" }, &output),
@@ -326,8 +295,6 @@ test "a command that never answers is killed" {
 test "an endless writer cannot fill the prompt or hang it" {
     var runner = testRunner(null);
     var output: [8]u8 = undefined;
-    // The writer blocks once the pipe fills; closing the read end unblocks it,
-    // and a truncated read is a failure because it cannot be parsed.
     const result = runner.command().run(
         &.{ "/bin/sh", "-c", "while :; do printf 0123456789; done" },
         &output,
@@ -342,6 +309,5 @@ test "a search path entry that does not fit is skipped, not truncated" {
         Runner.join(&buffer, "/very/long/directory", "program"),
     );
     try std.testing.expectEqualStrings("/bin/sh", Runner.join(&buffer, "/bin", "sh").?);
-    // An empty PATH entry means the current directory, so no separator is added.
     try std.testing.expectEqualStrings("sh", Runner.join(&buffer, "", "sh").?);
 }

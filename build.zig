@@ -8,13 +8,6 @@ const application_version: []const u8 = manifest.version;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    // A prompt runs for every command a human types, so the default build is
-    // ReleaseFast with debug information stripped: 71 KiB instead of 12 MiB,
-    // and 0.7 ms instead of 1.2 ms per prompt. `-Dmode=debug` builds one you can
-    // attach a debugger to; `-Dmode=safe` turns the runtime checks on.
-    // An explicit switch rather than `standardOptimizeOption`: `zig build` must
-    // produce the fast binary by default, and `-Dmode=safe` must really produce
-    // one with the runtime safety checks on, which is what audits need.
     const optimize = b.option(
         std.builtin.OptimizeMode,
         "mode",
@@ -44,8 +37,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    // `zig build fmt` writes, `zig build fmt:check` only reports: the second is
-    // what CI runs.
     const source_paths = [_]std.Build.LazyPath{
         b.path("build.zig"),
         b.path("build.zig.zon"),
@@ -60,18 +51,12 @@ pub fn build(b: *std.Build) void {
     const fmt_check = b.addFmt(.{ .paths = &source_paths, .check = true });
     fmt_check_step.dependOn(&fmt_check.step);
 
-    // A prompt runs on the shell's own stack, so its memory budget is a
-    // property of the whole program, not of any one function. A limit of 64 KiB
-    // is the smallest a shell may hand us, and the only way to notice a buffer
-    // that grew back into the megabytes.
     const stack_step = b.step("stack", "Render under a 64 KiB stack");
     const stack_check = b.addSystemCommand(&.{ "sh", "-c", "ulimit -s 64 && exec \"$0\" render > /dev/null" });
     stack_check.addFileArg(exe.getEmittedBin());
     stack_check.has_side_effects = true;
     stack_step.dependOn(&stack_check.step);
 
-    // The shipping configuration is ReleaseFast, where assertions are gone.
-    // Running each command in it catches a program that only works in Debug.
     const smoke_step = b.step("smoke", "Run every command in the shipping build");
     const smoke = b.addSystemCommand(&.{
         "sh",
@@ -83,7 +68,6 @@ pub fn build(b: *std.Build) void {
     smoke.has_side_effects = true;
     smoke_step.dependOn(&smoke.step);
 
-    // The hexagon, checked in CI rather than remembered: see tools/check_layers.zig.
     const layers_step = b.step("layers", "Fail if an import leaves its layer");
     const layers_module = b.createModule(.{
         .root_source_file = b.path("tools/check_layers.zig"),
@@ -95,14 +79,25 @@ pub fn build(b: *std.Build) void {
     layers_run.addArg("src");
     layers_step.dependOn(&layers_run.step);
 
+    const comments_step = b.step("comments", "Fail on a plain comment in the source");
+    const comments_module = b.createModule(.{
+        .root_source_file = b.path("tools/check_comments.zig"),
+        .target = b.graph.host,
+    });
+    const comments_check = b.addExecutable(.{ .name = "check-comments", .root_module = comments_module });
+    const comments_run = b.addRunArtifact(comments_check);
+    comments_run.has_side_effects = true;
+    comments_run.addArg("src");
+    comments_run.addArg("tools");
+    comments_run.addArg("build.zig");
+    comments_step.dependOn(&comments_run.step);
+
     const run_step = b.step("run", "Run prompty");
     const run_command = b.addRunArtifact(exe);
     run_command.step.dependOn(b.getInstallStep());
     run_command.addPassthruArgs();
     run_step.dependOn(&run_command.step);
 
-    // Tests are always Debug and always LLVM: kcov reads the DWARF that the
-    // self-hosted backend does not emit for user files.
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
@@ -119,8 +114,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the unit and integration tests");
     test_step.dependOn(&run_tests.step);
 
-    // Coverage needs an unstripped, LLVM-built binary: kcov maps breakpoints
-    // through DWARF, which stripping removes.
     const coverage_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -155,15 +148,8 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     const source_root = b.root.joinString(b.allocator, "src") catch @panic("OOM");
     const output_root = b.root.joinString(b.allocator, "coverage") catch @panic("OOM");
 
-    // kcov matches source paths as substrings, so the pattern needs the trailing
-    // separator to avoid matching a sibling directory that merely starts with
-    // the same name.
     const include = b.fmt("--include-pattern={s}/", .{source_root});
 
-    // kcov insists on cleaning directories that exist, so create them first.
-    // The directory is emptied first: `coverage/merged` from a previous run is
-    // itself a merge input, and a stale copy of the source makes the report
-    // disagree with the code it claims to measure.
     var clear = b.addSystemCommand(&.{ "rm", "-rf" });
     clear.addArg(output_root);
     clear.setName("rm -rf coverage");
@@ -181,12 +167,8 @@ fn addCoverage(b: *std.Build, test_binary: *std.Build.Step.Compile, exe: *std.Bu
     test_run.addArtifactArg(test_binary);
     test_run.expectExitCode(0);
     test_run.step.dependOn(&prepare.step);
-    // Every one of these steps writes into the coverage directory: caching them
-    // would mean a stale, or empty, report after the directory is removed.
     test_run.has_side_effects = true;
 
-    // The installed binary is traced too: `main` and the real adapters only run
-    // when the real process runs.
     const scenarios = [_]Scenario{
         .{ .arguments = &.{"version"} },
         .{ .arguments = &.{"theme"} },

@@ -43,7 +43,6 @@ fn stripTerminator(response: []const u8) []const u8 {
     if (std.mem.startsWith(u8, content, prefix)) {
         content = content[prefix.len..];
     } else if (std.mem.indexOf(u8, content, ";")) |semicolon| {
-        // Tolerate a response that arrives with its introducer trimmed off.
         content = content[semicolon + 1 ..];
     }
     while (content.len > 0) {
@@ -78,7 +77,6 @@ test "parses the xterm rgb dialect" {
         Rgb{ .r = 0x1e, .g = 0x1e, .b = 0x2e },
         parseBackground("\x1b]11;rgb:1e1e/1e1e/2e2e\x07").?,
     );
-    // Two-digit and one-digit components are legal too.
     try std.testing.expectEqual(
         Rgb{ .r = 0xab, .g = 0xcd, .b = 0xef },
         parseBackground("rgb:ab/cd/ef").?,
@@ -131,7 +129,6 @@ test "property: any reply is a colour or nothing" {
             length += piece.len;
         }
         if (parseBackground(buffer[0..length])) |color| {
-            // A parsed colour is a colour: three channels, nothing else.
             try std.testing.expect(color.r <= 0xff);
             try std.testing.expect(color.g <= 0xff);
             try std.testing.expect(color.b <= 0xff);

@@ -268,6 +268,10 @@ what makes `programs.prompty.enable = true;` sufficient.
 
 ## Testing
 
+Only documentation lives in the code: `//!` for a module, `///` for a
+declaration. Plain comments are forbidden and `zig build comments` fails on one —
+the reasoning belongs here, where it can be found without opening a file.
+
 The hexagon is checked, not remembered: `zig build layers` reads every file in
 `domain/` and `ports/` and fails if one imports outwards. A domain file that
 reached for `std.os.linux` would stop being testable without a machine, and that

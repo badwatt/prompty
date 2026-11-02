@@ -23,8 +23,6 @@ const Counts = struct {
     chars: u32,
 
     fn isSane(self: Counts) bool {
-        // A TZif file has at least one local time type and a non-empty
-        // abbreviation table; anything larger than this is not a real zone.
         if (self.type == 0) return false;
         if (self.chars == 0) return false;
         if (self.type > 256) return false;
@@ -50,8 +48,6 @@ pub fn offsetAt(zone: []const u8, unix_seconds: i64) ?i32 {
     };
 
     if (first.version >= '2') {
-        // Version 2+ files carry a second, 64-bit block that supersedes the
-        // legacy one. Only the second block is interesting.
         reader.skip(first_block) orelse return null;
         const second = parseHeader(&reader) orelse return null;
         const second_block = blockLength(second.counts, 8) orelse return null;
@@ -87,7 +83,6 @@ const Block = struct {
         const first_time = self.timeAt(zone, 0) orelse return null;
         if (unix_seconds < first_time) return self.fallbackOffset(zone);
 
-        // Binary search for the last transition that is not in the future.
         var low: u32 = 0;
         var high: u32 = self.counts.transition;
         while (low + 1 < high) {
@@ -206,11 +201,6 @@ fn be32(bytes: []const u8) u32 {
     return std.mem.readInt(u32, bytes[0..4], .big);
 }
 
-// ---------------------------------------------------------------------------
-// Test fixtures: a tiny, explicit TZif writer so every branch of the parser is
-// exercised without depending on the host's zoneinfo database.
-// ---------------------------------------------------------------------------
-
 const Fixture = struct {
     const Type = struct { offset: i32, is_dst: bool };
     const Zone = struct { transitions: []const i64, indices: []const u8, types: []const Type };
@@ -296,7 +286,6 @@ test "version 1 zones resolve offsets around their transitions" {
         },
     });
 
-    // Before the first transition the first non-DST type applies.
     try std.testing.expectEqual(@as(?i32, 3_600), offsetAt(zone, 0));
     try std.testing.expectEqual(@as(?i32, 3_600), offsetAt(zone, 999));
     try std.testing.expectEqual(@as(?i32, 3_600), offsetAt(zone, 1_000));
@@ -307,8 +296,6 @@ test "version 1 zones resolve offsets around their transitions" {
 
 test "version 2 zones use the 64-bit block" {
     var fixture: Fixture = .{};
-    // The legacy block says +1h, the modern block says -5h: only the modern
-    // block may be consulted.
     const zone = fixture.withSecondBlock(
         .{
             .transitions = &.{0},
@@ -374,11 +361,9 @@ test "rejects anything that is not a well formed TZif file" {
     bad_version[4] = '9';
     try std.testing.expectEqual(@as(?i32, null), offsetAt(bad_version[0..fixture.length], 0));
 
-    // Truncated: the block claims more data than the file owns.
     try std.testing.expectEqual(@as(?i32, null), offsetAt(good[0 .. good.len - 1], 0));
     try std.testing.expectEqual(@as(?i32, null), offsetAt(good[0..20], 0));
 
-    // A type index pointing outside the type table.
     var out_of_range: Fixture = .{};
     const broken = out_of_range.single(0, .{
         .transitions = &.{0},
@@ -390,7 +375,6 @@ test "rejects anything that is not a well formed TZif file" {
 
 test "rejects headers whose counts cannot describe a real zone" {
     var fixture: Fixture = .{};
-    // No local time types at all.
     fixture.header(0, .{ .is_utc = 0, .is_std = 0, .leap = 0, .transition = 0, .type = 0, .chars = 4 });
     try std.testing.expectEqual(@as(?i32, null), offsetAt(fixture.buffer[0..fixture.length], 0));
 
@@ -434,8 +418,6 @@ test "a version 2 file whose second header is missing is rejected" {
 }
 
 test "property: any bytes either answer or say nothing" {
-    // A zone file is data from disk: one bit flips, and the answer is null
-    // rather than a wrong clock or a read past the buffer.
     var prng = std.Random.DefaultPrng.init(0x721f);
     const random = prng.random();
     var buffer: [512]u8 = undefined;
@@ -443,14 +425,11 @@ test "property: any bytes either answer or say nothing" {
     for (0..3000) |_| {
         const length = random.intRangeAtMost(usize, 0, buffer.len);
         for (buffer[0..length]) |*byte| byte.* = random.int(u8);
-        // Half the time it looks like a zone, so the parser gets past the magic
-        // and into the counts and blocks.
         if (length >= 44 and random.boolean()) {
             @memcpy(buffer[0..4], magic);
             buffer[4] = if (random.boolean()) '2' else 0;
         }
         if (offsetAt(buffer[0..length], random.int(i64))) |offset| {
-            // A UTC offset is a day or so, never anything a clock can show.
             try std.testing.expect(offset > -86_400 and offset < 86_400);
         }
     }

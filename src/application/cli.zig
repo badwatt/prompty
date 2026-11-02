@@ -191,9 +191,6 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
                 .duration = options.duration,
             });
             const rendered = prompt.render(&model, &buffer);
-            // The zsh integration splits on this byte to get PROMPT and
-            // RPROMPT; without a right segment the output is just the line.
-            // Either way it goes out in one write: a prompt is one syscall.
             var joined: [canvas.Canvas.capacity + right_segment_bytes]u8 = undefined;
             const bytes = join(rendered, &joined);
             host.stdout.write(bytes);
@@ -324,13 +321,10 @@ test "render takes an optional shell and colour switch" {
     );
     try expectParse(.{ .render = .{} }, &.{ "prompty", "render", "--git" });
     try expectParse(.{ .render = .{ .git = false } }, &.{ "prompty", "render", "-g=false" });
-    // Both at once, one of them with an explicit value.
     try expectParse(
         .{ .render = .{ .git = false, .duration = true } },
         &.{ "prompty", "render", "-g=false", "--duration" },
     );
-    // A boolean flag with something else after it is a usage error, not a
-    // guess: `--git=maybe` has no meaning.
     try expectParse(.{ .invalid = "--git=maybe" }, &.{ "prompty", "render", "--git=maybe" });
     try expectParse(.{ .invalid = "--duration=0" }, &.{ "prompty", "render", "--duration=0" });
     try expectParse(.{ .invalid = "--no-git-status" }, &.{ "prompty", "render", "--no-git-status" });
@@ -398,11 +392,6 @@ test "theme detect takes an optional force" {
 test "unknown commands are reported verbatim" {
     try expectParse(.{ .invalid = "bench" }, &.{ "prompty", "bench" });
 }
-
-// ---------------------------------------------------------------------------
-// Dispatch tests: the commands run against a fake host, which is exactly what
-// the real process wires together.
-// ---------------------------------------------------------------------------
 
 const fakes = @import("../test_support/fakes.zig");
 
@@ -482,7 +471,6 @@ test "render writes exactly one prompt and one write" {
     const rendered = harness.host.stdout();
     try std.testing.expect(std.mem.startsWith(u8, rendered, "\n"));
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{276f}") != null);
-    // One syscall per prompt: the whole line goes out together.
     try std.testing.expectEqual(@as(usize, 1), harness.host.out.writes);
 }
 
@@ -511,7 +499,6 @@ test "theme detect is a no-op once the background is known" {
     }, &base_environment);
     try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "theme", "detect" }));
     try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "background #f5f5f5") != null);
-    // No terminal was asked, and nothing was written.
     try std.testing.expectEqual(@as(usize, 0), harness.host.files.write_count);
 }
 
@@ -522,8 +509,6 @@ test "theme detect stores what the terminal reports" {
     try std.testing.expectEqual(exit_ok, harness.dispatch(&.{ "prompty", "theme", "detect" }));
     try std.testing.expectEqual(@as(usize, 1), harness.host.files.write_count);
     try std.testing.expectEqualStrings("#000000\n", harness.host.files.written[0].bytes);
-    // The fake filesystem records writes but does not materialise them, so the
-    // printed palette still reflects the default background.
     try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "background #") != null);
 }
 
@@ -549,9 +534,6 @@ test "a silent terminal is reported without failing the shell" {
 }
 
 test "a hostile name cannot forge the separator the shell splits on" {
-    // The zsh integration splits the line on 0x1f to get PROMPT and RPROMPT. A
-    // branch or a directory that contains that byte would split the prompt in
-    // the wrong place, so it is replaced before the renderer sees it.
     const sources = [_]fakes.FakeFiles.File{
         .{ .path = "/srv/evil\x1fdir/.git/HEAD", .contents = "ref: refs/heads/main\x1fnot-really\n" },
     };
@@ -569,7 +551,6 @@ test "a hostile name cannot forge the separator the shell splits on" {
 
     const rendered = harness.host.stdout();
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
-    // And the right-hand side is only ever the number.
     const right = rendered[std.mem.indexOfScalar(u8, rendered, split).? + 1 ..];
     try std.testing.expect(std.mem.startsWith(u8, right, "%{\x1b[38;2;"));
     try std.testing.expect(std.mem.indexOf(u8, right, "1234ms") != null);

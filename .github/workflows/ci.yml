@@ -21,6 +21,8 @@ jobs:
         run: zig build test --summary all
       - name: The hexagon's arrows
         run: zig build layers
+      - name: Documentation only, no comments
+        run: zig build comments
       - name: Every command, in the shipping build
         run: zig build smoke
       - name: A render on a 64 KiB stack
