@@ -180,7 +180,7 @@ pub fn render(model: *const Model, buffer: []u8) Rendered {
         const line_length = canvas.len;
         if (model.duration_ms) |milliseconds| {
             var digits: [duration_mod.max_length]u8 = undefined;
-            const label = duration_mod.millis(&digits, milliseconds);
+            const label = duration_mod.format(&digits, milliseconds);
             paint(&canvas, model.theme.yellow, null);
             canvas.escape(bold_on);
             canvas.text(label);
@@ -641,7 +641,7 @@ test "the right-aligned duration travels after a separator, not as padding" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
     const left = rendered[0..std.mem.indexOfScalar(u8, rendered, split).?];
     try std.testing.expect(std.mem.endsWith(u8, left, "\u{276f} "));
-    try std.testing.expectEqualStrings("1234ms", rendered[left.len + 1 ..]);
+    try std.testing.expectEqualStrings("1.2s", rendered[left.len + 1 ..]);
 
     const colored = Model{
         .theme = theme,
@@ -652,12 +652,36 @@ test "the right-aligned duration travels after a separator, not as padding" {
     };
     const with_color = renderToString(&colored);
     var expected: [96]u8 = undefined;
-    const sequence = std.fmt.bufPrint(&expected, "\x1b[38;2;{d};{d};{d}m\x1b[1m1234ms", .{
+    const sequence = std.fmt.bufPrint(&expected, "\x1b[38;2;{d};{d};{d}m\x1b[1m1.2s", .{
         theme.yellow.r,
         theme.yellow.g,
         theme.yellow.b,
     }) catch unreachable;
     try std.testing.expect(std.mem.indexOf(u8, with_color, sequence) != null);
+}
+
+test "the right edge says a minute as a minute, not as the milliseconds it took" {
+    const model = Model{
+        .theme = fixtureTheme(),
+        .color = false,
+        .path = "~/p",
+        .duration_ms = 84_523,
+        .duration_placement = .right,
+    };
+    const rendered = renderToString(&model);
+    const left = rendered[0..std.mem.indexOfScalar(u8, rendered, split).?];
+    try std.testing.expectEqualStrings("1m24s", rendered[left.len + 1 ..]);
+
+    const long = Model{
+        .theme = model.theme,
+        .color = false,
+        .path = "~/p",
+        .duration_ms = 90_061_000,
+        .duration_placement = .right,
+    };
+    const rendered_long = renderToString(&long);
+    const left_long = rendered_long[0..std.mem.indexOfScalar(u8, rendered_long, split).?];
+    try std.testing.expectEqualStrings("1d1h", rendered_long[left_long.len + 1 ..]);
 }
 
 test "without a duration the right segment is empty, never missing" {
@@ -683,7 +707,7 @@ test "a name cannot forge the separator" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
 }
 
-test "the inline placement never pads and the right one never doubles" {
+test "the number is written once, on whichever side owns it" {
     const theme = fixtureTheme();
     const dimmed = Model{
         .theme = theme,
@@ -691,7 +715,9 @@ test "the inline placement never pads and the right one never doubles" {
         .path = "~/p",
         .duration_ms = 1_234,
     };
-    try std.testing.expect(std.mem.endsWith(u8, renderToString(&dimmed), "\u{276f} "));
+    const single = renderToString(&dimmed);
+    try std.testing.expect(std.mem.endsWith(u8, single, "\u{276f} "));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, single, "1.2s"));
 
     const right = Model{
         .theme = theme,
@@ -700,5 +726,8 @@ test "the inline placement never pads and the right one never doubles" {
         .duration_ms = 1_234,
         .duration_placement = .right,
     };
-    try std.testing.expect(std.mem.indexOf(u8, renderToString(&right), "1.2s") == null);
+    const separated = renderToString(&right);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, separated, "1.2s"));
+    const line = separated[0..std.mem.indexOfScalar(u8, separated, split).?];
+    try std.testing.expect(std.mem.endsWith(u8, line, "\u{276f} "));
 }

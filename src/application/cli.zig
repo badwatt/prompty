@@ -460,7 +460,7 @@ test "the right segment still leaves in one write" {
     );
     try std.testing.expectEqual(@as(usize, 1), harness.host.out.writes);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, harness.host.stdout(), &[_]u8{split}));
-    try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "1234ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, harness.host.stdout(), "1.2s") != null);
     try std.testing.expect(std.mem.endsWith(u8, harness.host.stdout(), "%{\x1b[0m%}"));
 }
 
@@ -553,7 +553,7 @@ test "a hostile name cannot forge the separator the shell splits on" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, &[_]u8{split}));
     const right = rendered[std.mem.indexOfScalar(u8, rendered, split).? + 1 ..];
     try std.testing.expect(std.mem.startsWith(u8, right, "%{\x1b[38;2;"));
-    try std.testing.expect(std.mem.indexOf(u8, right, "1234ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, right, "1.2s") != null);
     try std.testing.expect(std.mem.indexOf(u8, right, "evil") == null);
 }
 

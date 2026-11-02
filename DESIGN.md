@@ -183,6 +183,30 @@ the dimmed duration had never appeared either. bash has no `preexec`, only a
 is locale-formatted, so a Spanish shell hands out `1793542627,390303` and the
 separator has to be dropped before the subtraction.
 
+### Saying how long it took
+
+The duration is said the way it is said out loud: milliseconds under a second,
+tenths of a second up to ten, whole seconds up to a minute, then minutes, hours
+and days, each cut at the next unit's threshold — sixty minutes in an hour,
+twenty-four hours in a day. `850ms`, `4.3s`, `42s`, `1m24s`, `2h5m`, `1d1h`.
+
+Two rules keep it short without making it vague. **The tail unit is written
+only while the leading one is a single digit**: `1m5s` but `27m`, `2h5m` but
+`23h`, because once a wait is measured in dozens of minutes the seconds are
+noise. **A unit worth zero is never written**: `1m`, not `1m0s`, which is what a
+clock does and what a prompt must not. Nothing realistic passes five
+characters, and the longest string any `u64` can produce — a hundred and
+eighty-four quadrillion milliseconds — is `213503982334d`, thirteen bytes, which
+is the buffer it is given.
+
+The number the shell hands over is capped at a year: a command that claims to
+have taken longer is not a duration, it is a broken clock upstream, and the
+prompt says nothing rather than something absurd.
+
+Nothing rounds up. A command that took 59.9 seconds is not a minute, and one
+that took 1.9 is not two: the number is truncated, so it can only understate by
+less than the unit shown.
+
 ## The palette
 
 The only input is the terminal background. Everything else is derived in Oklab

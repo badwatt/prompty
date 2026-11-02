@@ -32,7 +32,10 @@ pub const Options = struct {
     duration: bool = false,
 };
 
-pub const max_duration_ms: u64 = 24 * 60 * 60 * 1000;
+/// A command that claims to have taken longer than a year is not a duration, it
+/// is a broken clock in whatever produced the number. Below that, the ladder
+/// runs to days, so a long build says `3d` and means it.
+pub const max_duration_ms: u64 = 365 * 24 * 60 * 60 * 1000;
 
 pub fn build(host: ports.Host, store: *store_mod.Store, options: Options) prompt.Model {
     std.debug.assert(options.keep_components > 0);
@@ -519,6 +522,13 @@ test "duration and exit status are read from the shell's environment" {
         }));
         try std.testing.expectEqual(@as(?u64, null), harness.model(.{}).duration_ms);
     }
+}
+
+test "a command longer than a day is still a duration" {
+    var harness = FakeHarness.init(&(default_environment ++ [_][2][]const u8{
+        .{ "PROMTY_LAST_DURATION_MS", "259200000" },
+    }));
+    try std.testing.expectEqual(@as(?u64, 259_200_000), harness.model(.{}).duration_ms);
 }
 
 test "direnv is visible without running it" {

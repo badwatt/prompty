@@ -130,13 +130,17 @@ say its name falls back to the user name.
 ### The last command's duration, against the right edge
 
 `-d`/`--duration` (or `programs.prompty.duration`) moves the duration out of the
-line and puts it where a prompt has room to spare: bold yellow, in plain
-milliseconds, against the right edge of the terminal, while the cursor stays
-right after the chevron.
+line and puts it where a prompt has room to spare: bold, against the right edge
+of the terminal, while the cursor stays right after the chevron.
 
 ```
- badwatt  …/prompty  main !  14:32 ❯  (cursor)                        1234ms
+ badwatt  …/prompty  main !  14:32 ❯  (cursor)                         1m24s
 ```
+
+The number is said the way you would say it: `850ms`, `4.3s`, `42s`, `1m24s`,
+`2h5m`, `1d1h`. Two units are written while the leading one is a single digit,
+and a unit worth zero is never written, so nothing realistic passes five
+characters. It turns yellow at two seconds and red at ten.
 
 It replaces the dimmed `1.2s`, so the number is never shown twice. The cursor
 stays where it belongs — right after the chevron, where you type — because the

@@ -1,38 +1,46 @@
-//! Human-readable command durations, tuned for a prompt: milliseconds never
-//! take more than five characters, and nothing after a minute is ever shown in
-//! tenths.
+//! Human-readable command durations, tuned for a prompt: the ladder is
+//! milliseconds, seconds, minutes, hours, days; the tail unit is written only
+//! while the leading one is a single digit; and a unit worth zero is never
+//! written at all. Realistic durations come out at five characters or fewer.
 
 const std = @import("std");
 
 pub fn format(out: []u8, milliseconds: u64) []const u8 {
     std.debug.assert(out.len >= max_length);
-    if (milliseconds < 1_000) {
-        return std.fmt.bufPrint(out, "{d}ms", .{milliseconds}) catch unreachable;
-    }
+    if (milliseconds < 1_000) return print(out, "{d}ms", .{milliseconds});
     if (milliseconds < 10_000) {
         const tenths = milliseconds / 100;
-        return std.fmt.bufPrint(out, "{d}.{d}s", .{ tenths / 10, tenths % 10 }) catch unreachable;
+        return print(out, "{d}.{d}s", .{ tenths / 10, tenths % 10 });
     }
-    if (milliseconds < 60_000) {
-        return std.fmt.bufPrint(out, "{d}s", .{milliseconds / 1_000}) catch unreachable;
-    }
+    if (milliseconds < 60_000) return print(out, "{d}s", .{milliseconds / 1_000});
+
     const seconds = milliseconds / 1_000;
     if (seconds < 3_600) {
-        return std.fmt.bufPrint(out, "{d}m{d}s", .{ seconds / 60, seconds % 60 }) catch unreachable;
+        const minutes = seconds / 60;
+        const rest = seconds % 60;
+        if (minutes < 10 and rest != 0) return print(out, "{d}m{d}s", .{ minutes, rest });
+        return print(out, "{d}m", .{minutes});
     }
-    return std.fmt.bufPrint(out, "{d}h{d}m", .{ seconds / 3_600, (seconds % 3_600) / 60 }) catch unreachable;
+    if (seconds < 86_400) {
+        const hours = seconds / 3_600;
+        const rest = (seconds % 3_600) / 60;
+        if (hours < 10 and rest != 0) return print(out, "{d}h{d}m", .{ hours, rest });
+        return print(out, "{d}h", .{hours});
+    }
+    const days = seconds / 86_400;
+    const rest = (seconds % 86_400) / 3_600;
+    if (days < 10 and rest != 0) return print(out, "{d}d{d}h", .{ days, rest });
+    return print(out, "{d}d", .{days});
 }
 
-/// The right-edge form: the number and its unit, nothing else. It exists so the
-/// prompt does not format numbers itself.
-pub fn millis(out: []u8, milliseconds: u64) []const u8 {
-    return std.fmt.bufPrint(out, "{d}ms", .{milliseconds}) catch unreachable;
+fn print(out: []u8, comptime template: []const u8, args: anytype) []const u8 {
+    return std.fmt.bufPrint(out, template, args) catch unreachable;
 }
 
-/// The longest form for any `u64` of milliseconds is `5124095576030431h0m`,
-/// twenty bytes. The production path caps at a day, but the formatter must not
-/// be able to overrun its buffer on a value it was handed.
-pub const max_length = 24;
+/// The longest form any `u64` of milliseconds produces: `213503982334d`, the
+/// days in a hundred and eighty-four quadrillion milliseconds. The formatter
+/// must not be able to overrun its buffer on a value it was handed.
+pub const max_length = 13;
 
 fn expectFormat(expected: []const u8, milliseconds: u64) !void {
     var buffer: [max_length]u8 = undefined;
@@ -57,25 +65,39 @@ test "whole seconds up to a minute" {
     try expectFormat("59s", 59_999);
 }
 
-test "even an absurd duration fits the buffer" {
+test "minutes and hours" {
+    try expectFormat("1m", 60_000);
+    try expectFormat("1m5s", 65_000);
+    try expectFormat("2m3s", 123_456);
+    try expectFormat("9m59s", 599_000);
+    try expectFormat("10m", 600_000);
+    try expectFormat("11m", 719_000);
+    try expectFormat("59m", 3_599_000);
+    try expectFormat("1h", 3_600_000);
+    try expectFormat("2h5m", 7_500_000);
+    try expectFormat("9h59m", 35_940_000);
+    try expectFormat("10h", 36_000_000);
+    try expectFormat("23h", 82_800_000);
+}
+
+test "days appear at the twenty-fourth hour, and then stop at two digits" {
+    try expectFormat("1d", 86_400_000);
+    try expectFormat("1d3h", 97_200_000);
+    try expectFormat("9d23h", 860_400_000);
+    try expectFormat("10d", 864_000_000);
+    try expectFormat("41d", 3_542_400_000);
+    try expectFormat("999d", 86_313_600_000);
+}
+
+test "no unit that is worth zero is ever written" {
+    try expectFormat("5m", 300_000);
+    try expectFormat("5h", 18_000_000);
+    try expectFormat("5d", 432_000_000);
+}
+
+test "the absurd end of the range is exactly as long as the buffer" {
     var buffer: [max_length]u8 = undefined;
     const formatted = format(&buffer, std.math.maxInt(u64));
-    try std.testing.expect(formatted.len <= max_length);
-    try std.testing.expect(std.mem.endsWith(u8, formatted, "m"));
-}
-
-test "minutes and hours" {
-    try expectFormat("1m0s", 60_000);
-    try expectFormat("2m3s", 123_456);
-    try expectFormat("59m59s", 3_599_000);
-    try expectFormat("1h0m", 3_600_000);
-    try expectFormat("2h5m", 7_500_000);
-}
-
-test "the right-edge form is the number in milliseconds" {
-    var buffer: [max_length]u8 = undefined;
-    try std.testing.expectEqualStrings("0ms", millis(&buffer, 0));
-    try std.testing.expectEqualStrings("1234ms", millis(&buffer, 1_234));
-    try std.testing.expectEqualStrings("86400000ms", millis(&buffer, 86_400_000));
-    try std.testing.expect(std.mem.endsWith(u8, millis(&buffer, std.math.maxInt(u64)), "ms"));
+    try std.testing.expectEqualStrings("213503982334d", formatted);
+    try std.testing.expectEqual(@as(usize, max_length), formatted.len);
 }
