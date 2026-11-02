@@ -85,7 +85,7 @@ microseconds. A Nerd Font is needed for the glyphs.
 
 ```
 prompty render [--shell=zsh|bash|plain] [--no-color]   print the prompt
-               [-c|--color] [-g|--git]                 color, git status
+               [-c|--color] [-g|--git]                 colour, git status
                [-d|--duration]                         the time, at the right edge
 prompty init zsh|bash [-d|--duration]                  print the shell integration
 prompty theme [detect [--force]]                       print (or redetect) the palette
