@@ -43,10 +43,7 @@ pub const Tty = struct {
     const read_write = linux.O{ .ACCMODE = .RDWR, .NOCTTY = true, .CLOEXEC = true };
 
     pub fn terminal(self: *const Tty) ports.Terminal {
-        return .{
-            .ptr = @ptrCast(@constCast(self)),
-            .vtable = &vtable,
-        };
+        return ports.wrap(ports.Terminal, self, &vtable);
     }
 
     const vtable = ports.Terminal.VTable{ .background = background };

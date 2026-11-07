@@ -22,15 +22,10 @@ pub const Status = struct {
     behind: u16 = 0,
 
     pub fn isClean(self: Status) bool {
-        return self.conflicted == 0 and
-            self.stashed == 0 and
-            self.deleted == 0 and
-            self.renamed == 0 and
-            self.modified == 0 and
-            self.staged == 0 and
-            self.untracked == 0 and
-            self.ahead == 0 and
-            self.behind == 0;
+        inline for (@typeInfo(Status).@"struct".field_names) |name| {
+            if (@field(self, name) != 0) return false;
+        }
+        return true;
     }
 
     pub fn isDiverged(self: Status) bool {

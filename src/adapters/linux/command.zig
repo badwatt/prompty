@@ -36,10 +36,7 @@ pub const Runner = struct {
     pub const max_path_bytes = 4096;
 
     pub fn command(self: *const Runner) ports.Command {
-        return .{
-            .ptr = @ptrCast(@constCast(self)),
-            .vtable = &vtable,
-        };
+        return ports.wrap(ports.Command, self, &vtable);
     }
 
     const vtable = ports.Command.VTable{ .run = run };

@@ -12,15 +12,6 @@ const compose = @import("compose.zig");
 const metadata = @import("metadata.zig");
 const shell_init = @import("shell_init.zig");
 
-pub const RenderOptions = struct {
-    shell: canvas.Shell = .plain,
-    color: bool = true,
-    /// Ask git for the working tree status. On by default: `--git=false` turns
-    /// it off, and the branch still comes from `.git/HEAD`.
-    git: bool = true,
-    duration: bool = false,
-};
-
 pub const ThemeOptions = struct {
     detect: bool = false,
     force: bool = false,
@@ -32,7 +23,7 @@ pub const InitOptions = struct {
 };
 
 pub const Action = union(enum) {
-    render: RenderOptions,
+    render: compose.Options,
     init: InitOptions,
     version,
     theme: ThemeOptions,
@@ -122,7 +113,7 @@ fn applyBoolean(field: *bool, flag: []const u8, short: u8, long: []const u8) ?bo
 }
 
 fn parseRender(flags: []const []const u8) Action {
-    var options = RenderOptions{};
+    var options = compose.Options{};
     for (flags) |flag| {
         if (std.mem.eql(u8, flag, "--no-color")) {
             options.color = false;
@@ -184,12 +175,7 @@ pub fn run(action: Action, host: ports.Host, store: *store_mod.Store) u8 {
     switch (action) {
         .render => |options| {
             var buffer: [canvas.Canvas.capacity]u8 = undefined;
-            const model = compose.build(host, store, .{
-                .shell = options.shell,
-                .color = options.color,
-                .git = options.git,
-                .duration = options.duration,
-            });
+            const model = compose.build(host, store, options);
             const rendered = prompt.render(&model, &buffer);
             var joined: [canvas.Canvas.capacity + right_segment_bytes]u8 = undefined;
             const bytes = join(rendered, &joined);

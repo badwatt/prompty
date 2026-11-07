@@ -123,7 +123,7 @@ fn assemble(out: []u8, parts: Parts) []const u8 {
 
     for (tail[0..tail_length], 0..) |component, position| {
         if (position > 0) written = clip(out, written, "/");
-        if (written + component.len > out.len) {
+        if (component.len > out.len - written) {
             written = clip(out, cutBackForMarker(out, written), ellipsis);
             break;
         }

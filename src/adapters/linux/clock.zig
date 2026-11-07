@@ -31,10 +31,7 @@ pub const LocalClock = struct {
     var zone_storage: [zone_capacity]u8 = undefined;
 
     pub fn clock(self: *const LocalClock) ports.Clock {
-        return .{
-            .ptr = @ptrCast(@constCast(self)),
-            .vtable = &vtable,
-        };
+        return ports.wrap(ports.Clock, self, &vtable);
     }
 
     const vtable = ports.Clock.VTable{ .now = now, .offsetAt = offsetAt };

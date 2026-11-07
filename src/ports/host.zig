@@ -127,3 +127,10 @@ pub const Host = struct {
     /// says which machine it is instead of who you are there.
     hostname: ?[]const u8 = null,
 };
+
+/// The shape every port has: an opaque pointer and the table of functions that
+/// work on it. Adapters come through here instead of repeating the two casts,
+/// so the unsafety is in one place and not six.
+pub fn wrap(comptime Port: type, self: anytype, vtable: *const Port.VTable) Port {
+    return .{ .ptr = @ptrCast(@constCast(self)), .vtable = vtable };
+}

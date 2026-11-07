@@ -15,10 +15,7 @@ pub const Fs = struct {
     pub const instance: Fs = .{};
 
     pub fn files(self: *const Fs) ports.Files {
-        return .{
-            .ptr = @ptrCast(@constCast(self)),
-            .vtable = &vtable,
-        };
+        return ports.wrap(ports.Files, self, &vtable);
     }
 
     const vtable = ports.Files.VTable{

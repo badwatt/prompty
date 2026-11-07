@@ -10,10 +10,7 @@ pub const Env = struct {
     block: [:null]const ?[*:0]const u8,
 
     pub fn environ(self: *const Env) ports.Environ {
-        return .{
-            .ptr = @ptrCast(@constCast(self)),
-            .vtable = &vtable,
-        };
+        return ports.wrap(ports.Environ, self, &vtable);
     }
 
     const vtable = ports.Environ.VTable{ .get = lookup };

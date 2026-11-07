@@ -15,10 +15,7 @@ pub const Out = struct {
     pub const stderr: Out = .{ .fd = posix.STDERR_FILENO };
 
     pub fn output(self: *const Out) ports.Output {
-        return .{
-            .ptr = @ptrCast(@constCast(self)),
-            .vtable = &vtable,
-        };
+        return ports.wrap(ports.Output, self, &vtable);
     }
 
     const vtable = ports.Output.VTable{ .write = writeAll };
